@@ -15,7 +15,7 @@
 
 ```powershell
 winget install Gyan.FFmpeg Xiph.FLAC     # 外部工具链（装完重开终端）
-git clone https://github.com/coldmentallighter/audio-edition.git
+git clone <仓库地址>                      # 或直接下载 ZIP 解压
 cd audio-edition
 .\run.bat                                # Windows：依赖、端口预检、健康检查、开浏览器全自动
 ```
