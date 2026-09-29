@@ -1,0 +1,25 @@
+# 注意顺序：gitattributes 里**后面的规则覆盖前面的**，
+# 所以通配规则必须写在最前面，例外写在后面。
+# （第一版把这条写反了，`* text=auto eol=lf` 排在 `*.bat eol=crlf` 之后，
+#   结果 run.bat 被归一化成 LF —— git add 的警告里能直接看出来。）
+
+# 默认：仓库内按 LF 归一化，二进制不动。
+* text=auto eol=lf
+
+# run.bat 是 **CRLF + GBK(chcp 936)** 的：里面有中文提示，且 cmd 对 UTF-8
+# 批处理支持不稳（换行与中文都可能被拆错）。所以它在工作区里必须保持 CRLF。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# run.sh 要在 Linux/macOS 下直接执行，必须是 LF，否则会报
+# `bad interpreter: /bin/bash^M`。
+*.sh text eol=lf
+*.bash text eol=lf
+
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.flac binary
+*.mp3 binary
+*.wav binary
+*.zip binary

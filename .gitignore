@@ -1,0 +1,52 @@
+# ---------------------------------------------------------------- 运行时数据
+# 这些目录/文件每次启动都会被清空或重建（见 backend/config.py 的 fresh_start），
+# 属于本机状态，不进仓库。
+uploads/
+outputs/
+.cache/
+audioedition.db
+audioedition.db-wal
+audioedition.db-shm
+cards.json
+
+# ---------------------------------------------------------------- 探针临时产物
+# 浏览器探针会现场生成这些页面/目录；跑完就没用了。
+_t.html
+_t.out.html
+_ce.html
+_ce.out.html
+_p.html
+_p.out.html
+_snapdrag.html
+
+# 无头浏览器的 user-data-dir（每个探针一个，能到几十 MB）
+_edgep/
+_cep*/
+_rg*/
+_sdp/
+_edge*/
+
+# 探针与脚本自己造的临时素材（WAV/FLAC/PNG…），跑完不必留
+tests/_*_tmp/
+tests/_tmp*/
+# snapshot_drag_real.py 每次运行都会把内嵌的 PAGE_JS 写到这里，属于产物
+tests/_snapdrag_page.js
+
+# ---------------------------------------------------------------- Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# ---------------------------------------------------------------- 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 用户自己的备份（theme.css.bak 是调色时的对照稿）
+*.bak
+*.orig

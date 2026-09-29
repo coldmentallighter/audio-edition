@@ -1,0 +1,20 @@
+# AudioEdition 运行依赖
+#
+# 实测环境（README「运行环境」一节的数据都来自这台机器）：
+#   Python 3.14.7 / Windows 11
+#   下列版本为已验证版本，写在 >= 里作为**下限**，不是硬锁定。
+#
+# 最低支持 Python 3.10（代码里用了 `dict[str, str]` 与 `X | Y` 这类注解）。
+#
+# 外部程序不由 pip 安装，需要单独装好并放进 PATH：
+#   ffmpeg / ffprobe   winget install Gyan.FFmpeg
+#   flac / metaflac    winget install Xiph.FLAC
+# 缺了也能启动，只是相关卡片会明确报错（不会静默失败）。
+
+fastapi>=0.141.1
+uvicorn[standard]>=0.54.0
+mutagen>=1.48.1
+python-multipart>=0.0.32
+
+# uvicorn[standard] 会带上 websockets，只有自检脚本 tests/snapshot_drag_real.py
+# 用它连 CDP；跑正常功能不需要单独装。
