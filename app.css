@@ -163,6 +163,24 @@ button, input, select { font: inherit; color: inherit; }
 }
 .input::placeholder { color: var(--text-muted); }
 .input--search { width: 200px; }
+.input--search {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  /* 聚焦时过渡，别让描边硬闪 */
+  transition: border-color .16s ease,
+              box-shadow .16s ease,
+              background .16s ease;
+}
+
+/* 吃掉全局那条 outline，改用 border + 内阴影表达聚焦 */
+.input--search:focus,
+.input--search:focus-visible {
+  outline: none;
+  border-color: var(--fill-primary);
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fill-primary) 30%, transparent);
+}
 
 .badge {
   display: inline-flex; align-items: center; gap: 5px;
@@ -761,7 +779,7 @@ button, input, select { font: inherit; color: inherit; }
   inset: 0;
   z-index: 54;
 
-  background: rgba(2, 2, 2, .18);
+  background: color-mix(in srgb, var(--bg-app) 25%, transparent);
   opacity: 0;
   pointer-events: none;
   transition:  .34s cubic-bezier(.16,1,.3,1);
@@ -907,9 +925,9 @@ button, input, select { font: inherit; color: inherit; }
   transform:
     perspective(400px)
     translate3d(
-      calc(var(--nx, 0) * 3px),
-      calc(var(--ny, 0) * 3px),
-      calc((var(--nx, 0) + var(--ny, 0)) * 3px)
+      calc(var(--nx, 0) * 2px),
+      calc(var(--ny, 0) * 2px),
+      calc((var(--nx, 0) + var(--ny, 0)) * 2px)
     )
     rotateX(calc(var(--ny, 0) * -5deg))
     rotateY(calc(var(--nx, 0) *  5deg));
@@ -1055,15 +1073,45 @@ button, input, select { font: inherit; color: inherit; }
 .cardsec + .cardsec { margin-top: 18px; }
 .cardsec__title {
   display: flex; align-items: center; gap: 9px;
+  width: 100%;
   margin: 0 0 10px;
+  padding: 8px 0 7px;
+  font: inherit;
   font-size: 13px; font-weight: 700; letter-spacing: .3px;
   color: var(--ink);
-  position: sticky; top: 0; z-index: 1;
-  padding: 8px 0 7px;
   background: var(--bg-surface);
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  position: sticky; top: 0; z-index: 1;
 }
 .cardsec__title::after {
   content: ""; flex: 1; height: 1px; background: var(--border);
+}
+
+/* 箭头：展开↓  收起→ */
+.cardsec__arrow {
+  width: 12px; height: 12px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: transform .2s ease;
+}
+.cardsec__arrow::before {
+  content: "";
+  width: 5px; height: 5px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(45deg) translate(-1px, -1px);   /* ↓ */
+}
+.cardsec[data-collapsed="true"] .cardsec__arrow::before {
+  transform: rotate(-45deg);                        /* → */
+}
+.cardsec__wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows .28s cubic-bezier(.4, 0, .2, 1);
+}
+.cardsec[data-collapsed="true"] .cardsec__wrap {
+  grid-template-rows: 0fr;
 }
 .cardsec__count {
   font-size: 11px; font-weight: 500; color: var(--text-muted);
@@ -1074,6 +1122,16 @@ button, input, select { font: inherit; color: inherit; }
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
   gap: 12px;
+  min-height: 0;
+  overflow: hidden;                       /* 基础值 = 裁剪，折叠动画必须靠它 */
+}
+
+/* 展开后放开裁剪，让 3D 位移和阴影完整露出；
+   但延迟到折叠动画播完（.28s）再切，否则展开瞬间内容会整块冒出来 */
+.cardsec[data-collapsed="false"] .cardsec__grid {
+  overflow: visible;
+  transition: overflow 0s linear .28s;
+  transition-behavior: allow-discrete;
 }
 
 /* ============ 卡片基础 ============ */
@@ -1086,7 +1144,7 @@ button, input, select { font: inherit; color: inherit; }
   cursor: pointer; text-align: left;
   transition: background .14s, border-color .14s, box-shadow .14s;
 }
-.fcard:hover { background: var(--tint-primary); border-color: var(--border-strong); box-shadow: var(--shadow-sm); }
+.fcard:hover { background: var(--tint-primary); border-color: var(--border-strong); box-shadow: var(--shadow-sm);}
 .fcard__top { display: flex; align-items: center; gap: 9px; }
 .fcard__ico {
   flex: 0 0 auto; width: 30px; height: 30px;
@@ -1157,7 +1215,7 @@ button, input, select { font: inherit; color: inherit; }
   box-shadow:
     0 8px 24px rgb(75 87 99 / 0.20),
     0 2px 6px  rgb(75 87 99 / 0.12);
-  z-index: 2;
+  z-index: 56;
 }
 
 /* 3. 内部元素视差（和整卡 transform 叠加，translate 属性和 transform 不冲突） */

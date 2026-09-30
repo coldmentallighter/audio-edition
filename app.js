@@ -1389,18 +1389,32 @@ function setSearch(open) {
   const dock = $('#searchDock');
   dock.dataset.search = open ? 'open' : 'closed';
   $('#searchToggle').setAttribute('aria-expanded', String(open));
+
   if (open) {
-    // 抽屉收着的时候点搜索，面板整个在窗口下边缘之外，
-    // 只把 dock 打开的话用户什么都看不到 —— 先把抽屉升到 mid。
     if (drawerState === 'closed') applyStop('mid');
-    // .searchfield 是 max-width:0 → 100% 的缓出，宽度为 0 时 focus() 不生效，
-    // 所以在过渡结束后补一次聚焦。
     const field = $('#cardSearch');
     requestAnimationFrame(() => field.focus());
     setTimeout(() => { if (dock.dataset.search === 'open') field.focus(); }, 380);
   } else {
+    // 1) 先记住哪些分组是收起的
+    const collapsed = new Set(
+      [...document.querySelectorAll('.cardsec')]
+        .filter(s => s.dataset.collapsed === 'true')
+        .map(s => s.querySelector('.cardsec__name')?.textContent ?? '')
+    );
+
     $('#cardSearch').value = '';
     renderCardSections('');
+
+    // 2) 重渲染后还原折叠状态
+    if (collapsed.size) {
+      document.querySelectorAll('.cardsec').forEach(sec => {
+        const name = sec.querySelector('.cardsec__name')?.textContent ?? '';
+        if (collapsed.has(name)) setCollapsed(sec, true);
+      });
+    }
+    // 3) 顺手把“全部收起/展开”按钮文案同步一下
+    syncToggleAllLabel();
   }
 }
 
@@ -1460,10 +1474,15 @@ function renderCardSections(q = '') {
     const hit = CARDS.filter(c => c.name.includes(query) || c.desc.includes(query)
                                   || c.cat.includes(query));
     box.innerHTML = hit.length
-      ? `<section class="cardsec">
-           <h3 class="cardsec__title">搜索结果
-             <span class="cardsec__count">${hit.length}</span></h3>
-           <div class="cardsec__grid">${hit.map(cardHTML).join('')}</div>
+      ? `<section class="cardsec" data-collapsed="false">
+           <button class="cardsec__title" type="button" aria-expanded="true">
+             <span class="cardsec__arrow" aria-hidden="true"></span>
+             <span class="cardsec__name">搜索结果</span>
+             <span class="cardsec__count">${hit.length}</span>
+           </button>
+           <div class="cardsec__wrap">
+             <div class="cardsec__grid">${hit.map(cardHTML).join('')}</div>
+           </div>
          </section>`
       : `<p class="chain__empty">没有匹配「${query}」的卡片</p>`;
     return;
@@ -1471,10 +1490,20 @@ function renderCardSections(q = '') {
 
   const section = (cat, list, extra = '') => {
     if (!list.length && !extra) return '';
-    const count = list.length ? `<span class="cardsec__count">${list.length}</span>` : '';
-    return `<section class="cardsec">
-        <h3 class="cardsec__title">${escHtml(cat)}${count}</h3>
-        <div class="cardsec__grid">${list.map(cardHTML).join('')}${extra}</div>
+    const count = list.length
+      ? `<span class="cardsec__count">${list.length}</span>`
+      : '';
+    return `<section class="cardsec" data-collapsed="false">
+        <button class="cardsec__title" type="button" aria-expanded="true">
+          <span class="cardsec__arrow" aria-hidden="true"></span>
+          <span class="cardsec__name">${escHtml(cat)}</span>
+          ${count}
+        </button>
+        <div class="cardsec__wrap">
+          <div class="cardsec__grid">
+            ${list.map(cardHTML).join('')}${extra}
+          </div>
+        </div>
       </section>`;
   };
 
@@ -1513,7 +1542,45 @@ function renderCardSections(q = '') {
 
   box.innerHTML = empty + html + tail;
 }
+/* ---- 卡片分组折叠（模块级，只绑定一次）---- */
 
+function setCollapsed(sec, collapsed) {
+  sec.dataset.collapsed = collapsed ? 'true' : 'false';
+  sec.querySelector('.cardsec__title')
+     ?.setAttribute('aria-expanded', String(!collapsed));
+}
+
+function syncToggleAllLabel() {
+  const btn = document.getElementById('cardsecToggleAll');
+  if (!btn) return;
+  const secs = document.querySelectorAll('#cardSections .cardsec');
+  if (!secs.length) return;
+  const anyOpen = [...secs].some(s => s.dataset.collapsed !== 'true');
+  btn.textContent = anyOpen ? '全部收起' : '全部展开';
+}
+
+function bindSectionToggles() {
+  const box = document.getElementById('cardSections');
+  const all = document.getElementById('cardsecToggleAll');
+  if (!box || box.dataset.sectionsBound) return;   // 幂等：重复调用也不会重绑
+  box.dataset.sectionsBound = '1';
+
+  box.addEventListener('click', (e) => {
+    const btn = e.target.closest('.cardsec__title');
+    if (!btn || !box.contains(btn)) return;
+    const sec = btn.closest('.cardsec');
+    if (!sec) return;
+    setCollapsed(sec, sec.dataset.collapsed !== 'true');
+    syncToggleAllLabel();
+  });
+
+  all?.addEventListener('click', () => {
+    const secs = box.querySelectorAll('.cardsec');
+    const anyOpen = [...secs].some(s => s.dataset.collapsed !== 'true');
+    secs.forEach(s => setCollapsed(s, anyOpen));
+    all.textContent = anyOpen ? '全部展开' : '全部收起';
+  });
+}
 function cardHTML(c) {
   return `<button class="fcard${c.custom ? ' fcard--custom' : ''}" data-card="${c.name}"
                   draggable="true"
@@ -2626,7 +2693,7 @@ function init() {
   setSearch(false);
   syncBulkbar();
   bind();
-
+  bindSectionToggles(); 
   initCardFollow(); 
   initSnapFollow();
 
