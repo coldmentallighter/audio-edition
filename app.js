@@ -1552,6 +1552,7 @@ function renderChain() {
               : !hasOp ? '链上没有可执行的后端操作'
               : `按顺序执行 ${chain.length} 步，作用于 ${scope} 个文件`;
   }
+  syncCardAddedState(); 
 }
 
 function escHtml(s) {
@@ -2178,16 +2179,29 @@ function bind() {
 
   // 抽屉把手：拖动改变"面板高"，松手吸附到最近一档
   const handle = $('#drawerHandle');
-  let drag = null;                          // {y0, top0, moved, dir, lo, hi}
+  let drag = null;                          // {y0, top0, moved}
 
   /** 当前档位序号（'closed' | 'mid' | 'full'） */
   const ORDER = ['closed', 'mid', 'full'];
-  const stopIndex = () => Math.max(0, ORDER.indexOf(drawerState));
+
+  /** 离给定盒顶最近的一档。
+   *  拖拽途中刷新 data-stop（圆角/背板不滞后）与松手吸附都用它。
+   *  档距不等（closed→mid 433px、mid→full 243px），所以只能比距离，
+   *  不能用固定像素阈值。 */
+  function nearestStop(top) {
+    const s = stops();
+    let best = ORDER[0], bestD = Infinity;
+    for (const name of ORDER) {
+      const d = Math.abs(top - s[name].top);
+      if (d < bestD) { bestD = d; best = name; }
+    }
+    return best;
+  }
 
   handle.addEventListener('pointerdown', e => {
     e.preventDefault();
     handle.setPointerCapture(e.pointerId);
-    drag = { y0: e.clientY, top0: curTop, moved: false, dir: 0, lo: 0, hi: 0 };
+    drag = { y0: e.clientY, top0: curTop, moved: false };
     document.body.style.userSelect = 'none';
   });
 
@@ -2197,28 +2211,21 @@ function bind() {
     if (!drag.moved && Math.abs(dy) < SNAP_MIN) return;
     if (!drag.moved) {
       drag.moved = true;
-      drag.dir = dy < 0 ? 1 : -1;            // 向上 = 展开方向
       $('#drawer').dataset.dragging = 'true'; // 拖拽中关过渡，跟手
-
-      // 一次手势只走一档：把指针行程限死在【本档 ↔ 相邻档】这一段内。
-      // 不这么做的话，从 closed 一路拖到顶端会越过 mid，松手时再跳回 mid，
-      // 看起来像「拖上去了又弹下来」。
-      const s = stops();
-      const i = stopIndex();
-      const j = Math.max(0, Math.min(ORDER.length - 1, i + drag.dir));
-      const a = s[ORDER[i]].top, b = s[ORDER[j]].top;
-      drag.lo = Math.min(a, b);
-      drag.hi = Math.max(a, b);
     }
-    // 1:1 跟手：盒顶跟着指针走，盒高不变（不放大位移）
-    applyTop(Math.max(drag.lo, Math.min(drag.hi, drag.top0 + dy)), null);
+    // 1:1 跟手：盒顶一路跟着指针走，**只在整个区间的两端夹住**。
+    // 之前这里把行程限死在"本档 ↔ 相邻档"之间（一次手势只走一档），
+    // 于是从 closed 拖到顶端也只到 mid、松手还回弹；现在放开整段，
+    // 一次手势可以从 closed 直接拖到 full。
+    const s = stops();
+    const top = Math.max(s.full.top, Math.min(s.closed.top, drag.top0 + dy));
+    // 途中就把 data-stop 指向"松手会落到的档"，圆角与背板才不会等到松手才变
+    applyTop(top, nearestStop(top));
   });
 
   const endDrag = () => {
     if (!drag) return;
     const wasDrag = drag.moved;
-    const startTop = drag.top0;
-    const travelled = startTop - curTop;     // 向上拖为正 = 展开方向
     document.body.style.userSelect = '';
     delete $('#drawer').dataset.dragging;    // 恢复过渡 → 吸附过程有动画
 
@@ -2228,16 +2235,9 @@ function bind() {
       return;
     }
 
-    const i = stopIndex();
-    const j = Math.max(0, Math.min(ORDER.length - 1, i + drag.dir));
-    if (j === i) {                           // 已经是端点，拖出去也回弹
-      applyStop(ORDER[i]);
-      drag = null;
-      return;
-    }
-    // 用户要求：过半个档位才换档，不足一半回弹，绝不停在半开的位置
-    const span = Math.abs(stops()[ORDER[i]].top - stops()[ORDER[j]].top);
-    applyStop(Math.abs(travelled) >= span / 2 ? ORDER[j] : ORDER[i]);
+    // 吸附到最近一档：拖过中点就换档，不到中点回弹。
+    // 中点天然是"两档之间"，所以"不足一半回弹"这条依然成立。
+    applyStop(nearestStop(curTop));
     drag = null;
   };
   handle.addEventListener('pointerup', endDrag);
@@ -2471,6 +2471,95 @@ window.applyServerHealth = function (h) {
       v.ok ? ((v.version || '').match(/\d+\.\d+(\.\d+)?/) || ['OK'])[0] : '缺失'
     }</span>`).join('');
 };
+/* 通用：让 container 内的 itemSelector 元素跟随光标写入 --mx/--my/--nx/--ny */
+function bindFollow(container, itemSelector) {
+  if (!container || container.dataset.followBound) return;
+  container.dataset.followBound = '1';
+  if (!window.matchMedia('(hover: hover)').matches) return;
+
+  container.addEventListener('pointermove', (e) => {
+    const el = e.target.closest(itemSelector);
+    if (!el || !container.contains(el)) return;
+
+    const r = el.getBoundingClientRect();
+    const w = r.width || 1;
+    const h = r.height || 1;
+    const x = e.clientX - r.left;
+    const y = e.clientY - r.top;
+
+    el.style.setProperty('--mx', x + 'px');
+    el.style.setProperty('--my', y + 'px');
+    el.style.setProperty('--nx', ((x / w) * 2 - 1).toFixed(3));
+    el.style.setProperty('--ny', ((y / h) * 2 - 1).toFixed(3));
+  });
+
+  container.addEventListener('pointerout', (e) => {
+    const el = e.target.closest(itemSelector);
+    if (!el || !container.contains(el)) return;
+    const to = e.relatedTarget;
+    if (to && el.contains(to)) return;
+    ['--mx', '--my', '--nx', '--ny'].forEach(p => el.style.removeProperty(p));
+  });
+}
+
+function initCardFollow() {
+  bindFollow(document.getElementById('cardSections'), '.fcard');
+}
+
+function initSnapFollow() {
+  bindFollow(document.querySelector('.snaps'), '.snap');
+}
+
+function initCardTap() {
+  const container = document.getElementById('cardSections');
+  if (!container || container.dataset.tapBound) return;
+  container.dataset.tapBound = '1';
+
+  container.addEventListener('pointerdown', (e) => {
+    const card = e.target.closest('.fcard');
+    if (!card || !container.contains(card)) return;
+
+    // 避免连点堆动画
+    card.classList.remove('is-tapped');
+    // 强制重排，让 animation 重头播
+    void card.offsetWidth;
+    card.classList.add('is-tapped');
+
+    // 动画结束就移除类，不然下一次点击不会重播
+    const onEnd = () => {
+      card.classList.remove('is-tapped');
+      card.removeEventListener('animationend', onEnd);
+    };
+    card.addEventListener('animationend', onEnd, { once: true });
+  });
+}
+
+/* 标记/取消某张卡片的「已加入」状态 */
+function markCardAdded(card, added) {
+  if (!card) return;
+  card.classList.toggle('is-added', !!added);
+  card.setAttribute('aria-pressed', added ? 'true' : 'false');
+}
+
+/* 根据执行链当前内容，同步所有卡片的对勾 */
+function syncCardAddedState() {
+  const names = new Set(chain.map(s => s.name));
+
+  // 卡片
+  document.querySelectorAll('#cardSections .fcard').forEach(card => {
+    const on = names.has(card.dataset.card);
+    card.classList.toggle('is-added', on);
+    card.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+
+  // 快照条
+  document.querySelectorAll('.snap').forEach(snap => {
+    const name = snap.dataset.snapName;
+    const on = !!name && names.has(name);
+    snap.classList.toggle('is-added', on);
+    snap.setAttribute('aria-pressed', on ? 'true' : 'false');
+  });
+}
 
 /* --------------------------------------------------------------- 启动 */
 
@@ -2485,13 +2574,17 @@ function init() {
   renderQueue();
   renderLogs();
   renderFiles();
-  renderEmptyState();   // 启动时 FILES 为空，先显示「拖文件导入」而不是空白
-  renderSnaps();  renderCardSections();
+  renderEmptyState();
+  renderSnaps();
+  renderCardSections();
   renderChain();
   setSearch(false);
   syncBulkbar();
   bind();
-  // 默认：只露快照条（closed）
+
+  initCardFollow(); 
+  initSnapFollow();
+
   syncDrawerLeft();
   applyStop('closed');
   requestAnimationFrame(redrawAllWaves);

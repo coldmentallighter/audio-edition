@@ -98,10 +98,35 @@
     await drag(Math.round(spanMF * 0.7));
     out.t8_fullDragDown = D().dataset.stop;                   // 期望 mid
 
-    /* closed 一路拖到顶端（越过 mid）-> 仍只走一档，落 mid，不跳过 */
+    /* ★ closed 一路拖到顶：一次手势必须能落到 full
+       （旧行为是把行程夹在相邻档内，只到 mid 并回弹；现已放开整段） */
     applyStop('closed'); await wait(80);
     await drag(-(Math.round(spanCM * 1.4)));
-    out.t9_overshoot = D().dataset.stop;                      // 期望 mid
+    out.t9_closedDragToTop = D().dataset.stop;                // 期望 full
+    out.t9_geom = { drawer: rect('#drawer'), wantTop: stops().full.top,
+                    viewportH: innerHeight };
+
+    /* ★ 反向：full 一路拖到底 -> closed（同样一次手势） */
+    applyStop('full'); await wait(80);
+    await drag(Math.round(spanCM * 1.4));
+    out.t10_fullDragToBottom = D().dataset.stop;              // 期望 closed
+
+    /* ★ 逐段推进：closed 拖到刚过 closed↔mid 中点 -> mid；
+       再从 mid 拖过 mid↔full 中点 -> full（两次手势串起来 = 三段走通） */
+    applyStop('closed'); await wait(80);
+    await drag(-(Math.round(spanCM * 0.55)));
+    out.t11a_closedToMid = D().dataset.stop;                  // 期望 mid
+    await drag(-(Math.round(spanMF * 0.55)));
+    out.t11b_midToFull = D().dataset.stop;                    // 期望 full
+
+    /* mid↔full 中点附近要能分辨方向：刚过中点落 full，刚不到落 mid */
+    applyStop('mid'); await wait(80);
+    const justUnder = Math.round(spanMF * 0.5) - 8;
+    await drag(-justUnder);
+    out.t12_justUnderMidPoint = D().dataset.stop;             // 期望 mid
+    applyStop('mid'); await wait(80);
+    await drag(-(Math.round(spanMF * 0.5) + 8));
+    out.t12b_justOverMidPoint = D().dataset.stop;             // 期望 full
 
     /* 搜索：收起状态下点击也应能看到搜索框（先把抽屉升到 mid） */
     applyStop('closed'); await wait(80);

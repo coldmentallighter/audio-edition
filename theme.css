@@ -28,6 +28,10 @@
   --drawer-handle: 12px;
   --z-drawer:      40;
   --z-notice:      60;
+  --spot-a1: 90%;
+  --spot-a2: 45%;
+  --spot-a3: 0%;
+  --spot-mix-base: var(--fill-primary);
 }
 
 /* ================= 类型1 蓝/橙  ·  浅色（空气感） ================= */

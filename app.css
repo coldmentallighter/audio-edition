@@ -44,6 +44,17 @@ html[data-vt-dir="sweep"]::view-transition-new(root) {
   mix-blend-mode: normal;
 }
 
+/*深浅色模式图标*/
+#modeToggle svg { width: 20px; height: 20px; display: block; }
+
+/* 默认（浅色）：只显太阳 */
+#modeToggle .icon-sun  { display: block; }
+#modeToggle .icon-moon { display: none; }
+
+/* 深色：只显月亮 */
+html[data-mode="dark"] #modeToggle .icon-sun  { display: none; }
+html[data-mode="dark"] #modeToggle .icon-moon { display: block; }
+
 /* 变亮（黑→白）：新帧白从圆心扩散 */
 html[data-vt-dir="expand"]::view-transition-old(root) { z-index: 1; }
 html[data-vt-dir="expand"]::view-transition-new(root) {
@@ -64,8 +75,8 @@ html[data-vt-dir="contract"]::view-transition-new(root) { z-index: 1; }
   to   { clip-path: circle(var(--vt-r, 150%) at 0% 100%); }
 }
 @keyframes vt-contract {
-  from { clip-path: circle(var(--vt-r, 150%) at 0% 100%); }
-  to   { clip-path: circle(0 at 0% 100%); }
+  from { clip-path: circle(var(--vt-r, 150%) at 100% 0%); }
+  to   { clip-path: circle(0 at 100% 0%); }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -847,6 +858,27 @@ button, input, select { font: inherit; color: inherit; }
   border-radius: var(--radius-card);
   cursor: pointer; text-align: left;
   transition: background .14s, border-color .14s;
+  position: relative;
+  isolation: isolate;
+}
+/* 整卡 3D：幅度约为 fcard 的 1/3 */
+.snap:not(.snap--add) {
+  transform:
+    perspective(800px)
+    translate3d(
+      calc(var(--nx, 0) * 2px),
+      calc(var(--ny, 0) * 2px),
+      0
+    )
+    rotateX(calc(var(--ny, 0) * -2deg))
+    rotateY(calc(var(--nx, 0) *  2deg));
+  transform-origin: center center;
+  transition:
+    transform .18s cubic-bezier(.22, .61, .36, 1),
+    background .14s,
+    border-color .14s,
+    box-shadow .14s;
+  will-change: transform;
 }
 .snap:hover { background: var(--fill-primary); border-color: var(--border-strong); color: var(--on-fill); }
 .snap__ico {
@@ -863,7 +895,69 @@ button, input, select { font: inherit; color: inherit; }
 .snap__name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .snap__hint { font-size: 10px; color: var(--text-muted); }
 .snap:hover .snap__hint { color: var(--on-fill); opacity: .8; }
+/* hover 时抬一点，别太强 */
+.snap:not(.snap--add):hover {
+  box-shadow:
+    0 4px 12px color-mix(in srgb, var(--ink) 14%, transparent),
+    var(--shadow-sm);
+  z-index: 2;
+}
+/* 图标轻微 3D 视差 + hover 阴影 */
+.snap:not(.snap--add) .snap__ico {
+  transform:
+    perspective(400px)
+    translate3d(
+      calc(var(--nx, 0) * 3px),
+      calc(var(--ny, 0) * 3px),
+      calc((var(--nx, 0) + var(--ny, 0)) * 3px)
+    )
+    rotateX(calc(var(--ny, 0) * -5deg))
+    rotateY(calc(var(--nx, 0) *  5deg));
+  transition: transform .14s ease-out, box-shadow .22s ease;
+  will-change: transform;
+}
+.snap:not(.snap--add):hover .snap__ico {
+  box-shadow: var(--shadow-sm);
+}
+/* 文字极轻跟随（一层就够，别分层） */
+.snap:not(.snap--add) .snap__txt {
+  transform: translate3d(
+    calc(var(--nx, 0) * 1.2px),
+    calc(var(--ny, 0) * 1.2px),
+    0
+  );
+  transition: transform .14s ease-out;
+  will-change: transform;
+}
 
+/* 点击反馈：比 fcard 更轻 */
+.snap:not(.snap--add):active {
+  scale: .97;
+  transition: scale .1s ease-out;
+}
+/* 松手：快速弹回 */
+.snap:not(.snap--add){
+  transition:
+    transform .13s cubic-bezier(.22, .61, .36, 1),
+    scale     .13s cubic-bezier(.22, .61, .36, 1),
+    background .1s, border-color .1s, box-shadow .1s;
+}
+
+/* 拖拽中的那一格不参与跟随（避免和 drop 反馈打架） */
+.snap.snap--drop {
+  transform: none !important;
+}
+
+/* 触屏关闭 */
+@media (hover: none) {
+  .snap:not(.snap--add) {
+    transform: none !important;
+  }
+  .snap .snap__ico,
+  .snap .snap__txt {
+    transform: none !important;
+  }
+}
 /* --- 快照拖拽：卡片拖进来替换 / 快照互拖换位 --- */
 .snap[draggable="true"] { cursor: grab; }
 .snap[draggable="true"]:active { cursor: grabbing; }
@@ -882,6 +976,55 @@ button, input, select { font: inherit; color: inherit; }
 .snap--add .snap__ico { opacity: .5; }
 .snap--add .snap__name { font-weight: 500; }
 .snap--add:hover { background: var(--tint-primary); color: var(--ink); }
+/* ============ 快照条：已加入执行链 ============ */
+
+.snap::after {
+  content: "✓";
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  translate: 0 -50%;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--fill-primary);
+  color: var(--on-fill);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+  z-index: 3;
+
+  /* 默认隐藏 */
+  opacity: 0;
+  scale: .4;
+
+  transition:
+    opacity .22s ease,
+    scale .26s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+.snap.is-added::after {
+  opacity: 1;
+  scale: 1;
+}
+
+/* hover 变主色底时，让对勾换成 --on-fill 底，反差更清楚 */
+.snap.is-added:hover::after {
+  background: var(--on-fill);
+  color: var(--fill-primary);
+}
+
+/* 加了对勾要给右侧留位置，避免挡住文字 */
+.snap.is-added { padding-right: 30px; }
+
+/* 触屏/减弱动效 */
+@media (prefers-reduced-motion: reduce) {
+  .snap::after { transition: none; }
+}
 
 .drawer__head {
   flex: 0 0 auto;
@@ -933,6 +1076,7 @@ button, input, select { font: inherit; color: inherit; }
   gap: 12px;
 }
 
+/* ============ 卡片基础 ============ */
 .fcard {
   display: flex; flex-direction: column; gap: 7px;
   padding: 12px 13px;
@@ -958,6 +1102,177 @@ button, input, select { font: inherit; color: inherit; }
 .fcard--new { border-style: dashed; justify-content: center; align-items: center; text-align: center; color: var(--text-muted); }
 .fcard--new:hover { color: var(--ink); }
 
+/* ============ 卡片光标跟随 ============ */
+
+/* 1. 卡片裁剪容器 + 底色渐变层 */
+#cardSections .fcard {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+#cardSections .fcard::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  background: radial-gradient(
+    circle at var(--mx, 50%) var(--my, 50%),
+    color-mix(in srgb, var(--spot-mix-base) var(--spot-a1), transparent) 0%,
+    color-mix(in srgb, var(--spot-mix-base) var(--spot-a2), transparent) 28%,
+    color-mix(in srgb, var(--spot-mix-base) var(--spot-a3), transparent) 70%
+  );
+  opacity: 0;
+  transition: opacity .28s ease;
+  z-index: 0;
+}
+#cardSections .fcard:hover::after { opacity: 1; }
+
+/* 内容抬到渐变层之上 */
+#cardSections .fcard > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* 2. 整卡跟随：位移 + 3D 倾斜 */
+#cardSections .fcard:not(.fcard--new) {
+  transform:
+    perspective(600px)
+    translate3d(
+      calc(var(--nx, 0) * 6px),
+      calc(var(--ny, 0) * 6px),
+      0
+    )
+    rotateX(calc(var(--ny, 0) * -5deg))
+    rotateY(calc(var(--nx, 0) *  5deg));
+  transform-origin: center center;
+  perspective: 800px;
+  perspective-origin: center center;
+  transition: transform .18s cubic-bezier(.22, .61, .36, 1),
+              background .14s, border-color .14s, box-shadow .14s;
+  will-change: transform;
+}
+#cardSections .fcard:not(.fcard--new):hover {
+  box-shadow:
+    0 8px 24px rgb(75 87 99 / 0.20),
+    0 2px 6px  rgb(75 87 99 / 0.12);
+  z-index: 2;
+}
+
+/* 3. 内部元素视差（和整卡 transform 叠加，translate 属性和 transform 不冲突） */
+#cardSections .fcard:not(.fcard--new) .fcard__ico {
+  transform:
+    perspective(400px)
+    translate3d(
+      calc(var(--nx, 0) * 8px),
+      calc(var(--ny, 0) * 8px),
+      calc((var(--nx, 0) + var(--ny, 0)) * 8px)
+    )
+    rotateX(calc(var(--ny, 0) * -11deg))
+    rotateY(calc(var(--nx, 0) *  11deg));
+  transition: transform .14s ease-out,
+              box-shadow .1s ease;   /* ← 新增 */
+  will-change: transform;
+}
+
+#cardSections .fcard:not(.fcard--new):hover .fcard__ico {
+  box-shadow: var(--shadow-md);
+}
+
+
+#cardSections .fcard:not(.fcard--new) .fcard__name {
+  translate: calc(var(--nx, 0) * 2px) calc(var(--ny, 0) * 1px);
+  transition: translate .12s ease-out;
+}
+#cardSections .fcard:not(.fcard--new) .fcard__desc {
+  translate: calc(var(--nx, 0) * 1px) calc(var(--ny, 0) * .5px);
+  transition: translate .12s ease-out;
+}
+#cardSections .fcard:not(.fcard--new) .fcard__foot {
+  translate: calc(var(--nx, 0) * 1px);
+  transition: translate .12s ease-out;
+}
+
+/* 4. 触屏关闭所有跟随 */
+@media (hover: none) {
+  #cardSections .fcard::after { display: none; }
+  #cardSections .fcard:not(.fcard--new) {
+    transform: none !important;
+  }
+  #cardSections .fcard .fcard__ico,
+  #cardSections .fcard .fcard__name,
+  #cardSections .fcard .fcard__desc,
+  #cardSections .fcard .fcard__foot {
+    translate: none !important;
+  }
+}
+/* ============ 卡片点击反馈 ============ */
+
+/* 按下：轻微缩小 + 阴影收拢，像被按下去 */
+#cardSections .fcard:not(.fcard--new):active {
+  scale: 0.94;
+  box-shadow: var(--shadow-sm),
+              0 0 0 2px var(--tint-primary) inset;
+  transition: scale .09s ease-out,
+              box-shadow .09s ease-out;
+}
+
+/* 松手：快速弹回 */
+#cardSections .fcard:not(.fcard--new) {
+  transition:
+    transform .18s cubic-bezier(.22, .61, .36, 1),
+    scale     .18s cubic-bezier(.22, .61, .36, 1),
+    background .14s, border-color .14s, box-shadow .14s;
+}
+
+
+
+/* 触屏：按下反馈保留，缩放更明显一点，手指感知更强 */
+@media (hover: none) {
+  #cardSections .fcard:not(.fcard--new):active {
+    scale: 0.94;
+  }
+}
+/* ============ 已加入执行链：右上角对勾（常驻伪元素 + transition） ============ */
+
+#cardSections .fcard::before {
+  content: "✓";
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--fill-primary);
+  color: var(--on-fill);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgb(75 87 99 / 0.22);
+  z-index: 3;
+  pointer-events: none;
+
+  /* 默认隐藏 */
+  opacity: 0;
+  scale: .4;
+
+  transition:
+    opacity .22s ease,
+    scale .26s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+/* 加入时：淡入 + 弹一下（曲线带过冲） */
+#cardSections .fcard.is-added::before {
+  opacity: 1;
+  scale: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #cardSections .fcard::before { transition: none; }
+}
 /* 搜索：固定在窗口最底部，点击唤出 + 缓出 */
 .drawer__search {
   flex: 0 0 auto;
