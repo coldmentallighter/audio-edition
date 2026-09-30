@@ -1,0 +1,112 @@
+/* ========================= 卡片编辑器 ========================= */
+
+.modal__box--wide { width: min(940px, calc(100vw - 48px)); }
+
+.cardedit {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 20px;
+  /* 上限 + 自身滚动：参数多的时候不能把模态盒子顶出视口 */
+  max-height: min(62vh, 560px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.cardedit__col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cardedit__base {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0;
+}
+.cardedit__base .field > span { font-size: 11.5px; color: var(--text-muted); }
+.cardedit__h {
+  margin: 6px 0 0; font-size: 13px;
+  display: flex; align-items: baseline; gap: 8px;
+}
+.cardedit__hint { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+
+.cardedit__opsdesc {
+  padding: 9px 11px;
+  font-size: 12px; line-height: 1.55;
+  color: var(--ink);
+  background: var(--tint-primary);
+  border-radius: var(--radius-inner);
+}
+
+/* 参数表单：每个参数一行「控件 + 说明」，说明直接写在控件下面 */
+.cardedit__params { display: flex; flex-direction: column; gap: 10px; }
+.pspec {
+  display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 10px 12px;
+  align-items: start;
+  padding: 10px 12px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  min-width: 0;
+}
+.pspec__label { font-size: 12.5px; font-weight: 600; padding-top: 7px; }
+.pspec__label em { display: block; font-style: normal; font-weight: 400;
+  font-size: 10.5px; color: var(--text-muted); margin-top: 2px; }
+.pspec__ctl { min-width: 0; }
+.pspec__ctl .input, .pspec__ctl select { width: 100%; }
+.pspec__desc { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.6; color: var(--text-muted); }
+.pspec__desc code {
+  padding: 1px 4px; font-size: 11px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 5px;
+}
+.pspec--off { opacity: .45; }
+.pspec__na { font-size: 11.5px; color: var(--text-muted); padding-top: 8px; }
+.pspec textarea.input { min-height: 66px; resize: vertical; font-family: inherit; }
+.pspec__check { display: inline-flex; align-items: center; gap: 7px; padding-top: 7px;
+  font-size: 12.5px; cursor: pointer; }
+
+.iconpick { display: flex; flex-wrap: wrap; gap: 6px; }
+.iconpick__btn {
+  width: 34px; height: 34px; display: grid; place-items: center;
+  color: var(--ink);
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px; cursor: pointer;
+  transition: background .14s, border-color .14s;
+}
+.iconpick__btn svg { width: 16px; height: 16px; }
+.iconpick__btn:hover { background: var(--tint-primary); }
+.iconpick__btn[aria-checked="true"] {
+  background: var(--fill-primary); color: var(--on-fill); border-color: transparent;
+}
+
+.cmdpreview {
+  margin: 0; padding: 11px 12px;
+  font-size: 11.5px; line-height: 1.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink);
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  white-space: pre-wrap; word-break: break-all;
+  min-height: 62px;
+}
+.cardedit__note { margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+.cardedit__err {
+  padding: 9px 11px; font-size: 12px;
+  color: var(--ink-error);
+  background: var(--error-tint);
+  border-radius: var(--radius-inner);
+  white-space: pre-wrap;
+}
+.cardedit__spacer { flex: 1; }
+.btn--danger { color: var(--ink-error); }
+.btn--danger:hover { background: var(--error-tint); }
+
+@media (max-width: 900px) {
+  .cardedit { grid-template-columns: minmax(0, 1fr); }
+  .cardedit__base { grid-template-columns: minmax(0, 1fr); }
+  .pspec { grid-template-columns: minmax(0, 1fr); }
+  .pspec__label { padding-top: 0; }
+}
+
+/* ============================== 响应 ============================== */
+
+@media (max-width: 1400px) {
+  .metacard { flex-basis: 250px; }
+  .cover { flex-basis: 80px; height: 80px; }
+  .snaps { gap: 16px; }
+  .wave { min-width: 280px; }
+}

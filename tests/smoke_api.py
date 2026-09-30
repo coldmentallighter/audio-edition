@@ -29,6 +29,7 @@ _PNG_1PX = bytes.fromhex(
 BASE = "http://127.0.0.1:8765"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend import cards as cards_mod  # noqa: E402
+from backend import config as config_mod  # noqa: E402
 from backend import store as store_mod  # noqa: E402
 # 项目根，不是 tests/ —— 之前写成 Path(__file__).parent，
 # 结果 .cache/ 找错目录，而且「落点仍在 uploads 内」那条断言比的是
@@ -706,7 +707,61 @@ if subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
         aid = u["saved"][0]["id"]
         tag_ids.append(aid)
         s, w = req("PUT", f"/api/files/{aid}/tags", {"tags": WANT})
-        check("AAC 写标签明确失败（而不是假装成功）", s >= 400, f"{s} {str(w)[:80]}")
+        # 断言**具体状态码**，不能写 s >= 400 —— 那样 500 也能过。
+        # 这个洞真的漏过一次：AAC 写标签走了 HTTPException(500)，
+        # "格式不支持"被当成了服务端故障，日志里看着像后端崩了。
+        check("AAC 写标签明确失败，且是 415 而不是 500",
+              s == 415, f"{s} {str(w)[:80]}")
+
+# 非音频文件没有波形：/peaks 必须是 4xx，不能是 500
+# （库里允许放图片，前端以前对**每个**文件都拉 peaks，图片必然解码失败，
+#   于是每刷新一次列表就刷一串 500 —— 实测日志里 100+ 条）
+raw, ctype = multipart({"paths": json.dumps(["冒烟测试/波形/图.png"])},
+                       [("files", "图.png", _PNG_1PX, "image/png")])
+s, u = req("POST", "/api/upload", raw=raw, ctype=ctype)
+if isinstance(u, dict) and u.get("saved"):
+    pid = u["saved"][0]["id"]
+    _s, fl = req("GET", "/api/files")
+    row = next((x for x in (fl.get("files") or []) if x["id"] == pid), None)
+    check("图片在列表里被标成 kind=image（前端靠它跳过波形）",
+          row is not None and row.get("kind") == "image", row and row.get("kind"))
+    s, body = req("GET", f"/api/files/{pid}/peaks?buckets=100")
+    check("图片请求 /peaks 返回 415 而不是 500", s == 415, f"{s} {str(body)[:100]}")
+    req("DELETE", f"/api/files/{pid}?withDisk=true")
+
+# ---- 「显示所在目录」：只收 fid，路径由后端算，且必须落在 uploads/ 内 ----
+# 一律用 open=false：真拉起 explorer 会在开发机上弹一屏资源管理器。
+print("\n== 显示所在目录（/reveal） ==")
+s, fl = req("GET", "/api/files")
+_files = fl.get("files") or []
+if _files:
+    _rid = _files[0]["id"]
+    s, r = req("POST", f"/api/files/{_rid}/reveal?open=false")
+    check("reveal 返回 200", s == 200, f"{s} {str(r)[:80]}")
+    _p = (r or {}).get("path", "")
+    check("返回的是**绝对**路径", bool(_p) and Path(_p).is_absolute(), _p)
+    try:
+        _inside = config_mod.UPLOADS.resolve() in Path(_p).resolve().parents
+    except Exception:
+        _inside = False
+    check("路径落在 uploads/ 内（越界拿不到）", _inside, _p)
+    check("open=false 时不拉起任何进程", (r or {}).get("opened") is False, r)
+    check("明确标出这是工作副本，不是原文件",
+          (r or {}).get("kind") == "working-copy", (r or {}).get("kind"))
+
+    # 软删除之后工作副本还在（withDisk=false），reveal 应当仍然可用
+    req("DELETE", f"/api/files/{_rid}?withDisk=false")
+    s, _ = req("POST", f"/api/files/{_rid}/reveal?open=false")
+    check("软删除后仍能 reveal（行还在、文件也还在）", s == 200, s)
+    # 真删掉磁盘上那份之后必须明确报错，而不是打开一个空目录
+    req("DELETE", f"/api/files/{_rid}?withDisk=true")
+    s, _ = req("POST", f"/api/files/{_rid}/reveal?open=false")
+    check("工作副本没了 → 404", s == 404, s)
+
+# 用 ASCII 假 id：URL 里放中文会让 urllib 直接抛异常（要自己转义），
+# 这条只是想验 404，没必要牵扯编码。
+s, _ = req("POST", "/api/files/f_nope/reveal?open=false")
+check("不存在的文件 → 404", s == 404, s)
 
 for tid in tag_ids:
     req("DELETE", f"/api/files/{tid}?withDisk=true")

@@ -28,10 +28,30 @@
   --drawer-handle: 12px;
   --z-drawer:      40;
   --z-notice:      60;
-  --spot-a1: 90%;
-  --spot-a2: 45%;
+  /* 遮罩强度台阶。**必须偏"平"**：原来的 90/45/0 是为实心光晕调的，
+     用在网点上会让远处那一圈直接淡到看不见 —— 那就只剩"近大"、没有"远小"了。
+     现在各层在自己的 reach 内基本不透明，只在最外 38% 上淡出（避免出现硬边圈）。 */
+  --spot-a1: 100%;
+  --spot-a2: 75%;
   --spot-a3: 0%;
   --spot-mix-base: var(--fill-primary);
+  --spot-mix-base-sn: var(--tint-primary);
+  /* 卡片 hover 的彩色半调（AM 网点：**近处点大、远处点小**）。
+     四层同心网点共用一个格网原点，每层一个点径 + 自己的径向遮罩，
+     由外到内点径递增、遮罩 reach 递减 —— 越靠近光标，叠上来的点越大。
+     最外层（reach 最大）用第二色，所以远处是细的副 ink、近处被放大的主 ink 盖住。
+     --spot-a1/2/3 是每层共享的**强度台阶**，位置仍在光标处。 */
+  --spot-cell:    10px;                   /* 网点格距 */
+  --spot-dot-1:   18%;                    /* 最外层点径（占 closest-side 半径的比例） */
+  --spot-dot-2:   30%;
+  --spot-dot-3:   50%;
+  --spot-dot-4:   60%;                    /* 最里层点径 */
+  --spot-reach-1: 85%;                    /* 最外层的遮罩半径，逐层收窄 */
+  --spot-reach-2: 60%;
+  --spot-reach-3: 40%;
+  --spot-reach-4: 20%;
+  --spot-alt-a:   85%;                    /* 副 ink 强度，调 0 就只剩主 ink */
+  --spot-mix-alt: var(--fill-accent);     /* 副 ink 取第二色 */
 }
 
 /* ================= 类型1 蓝/橙  ·  浅色（空气感） ================= */
@@ -60,8 +80,8 @@
   --border-strong:  rgb(75 87 99 / 0.45);
   --shadow-sm:      0 1px 2px rgb(75 87 99 / 0.12);
   --shadow-md:      0 4px 12px rgb(75 87 99 / 0.18);
-  --scroll-track:   #D4D8DB;
-  --scroll-thumb:   #BDDBF8;
+  --scroll-track:   #BDDBF8;
+  --scroll-thumb:   #F4F6F9;
 }
 
 /* ================= 类型1 蓝/橙  ·  深色 ================= */
@@ -123,8 +143,8 @@
   --border-strong:  rgb(72 92 71 / 0.45);
   --shadow-sm:      0 1px 2px rgb(72 92 71 / 0.12);
   --shadow-md:      0 4px 12px rgb(72 92 71 / 0.18);
-  --scroll-track:   #D5DAD5;
-  --scroll-thumb:   #BEDFBD;
+  --scroll-track:   #BEDFBD;
+  --scroll-thumb:   #F5F8F5;
 }
 
 /* ================= 类型2 绿/橙  ·  深色 ================= */
@@ -184,8 +204,8 @@
   --border-strong:  rgb(128 119 153 / 0.45);
   --shadow-sm:      0 1px 2px rgb(128 119 153 / 0.12);
   --shadow-md:      0 4px 12px rgb(128 119 153 / 0.18);
-  --scroll-track:   #D6D4DB;
-  --scroll-thumb:   #D6C7FF;
+  --scroll-track:   #D6C7FF;
+  --scroll-thumb:   #F5F4F9;
 }
 
 /* ================= 类型3 紫/珊瑚  ·  深色 ================= */

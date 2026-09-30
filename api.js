@@ -39,6 +39,8 @@ const API = (() => {
     tags:        (id) => j('GET', `/api/files/${id}/tags`),
     putTags:     (id, tags, clearMissing) => j('PUT', `/api/files/${id}/tags`, { tags, clearMissing }),
     del:         (id, withDisk = false) => j('DELETE', `/api/files/${id}?withDisk=${withDisk}`),
+    // open=false 只解析出绝对路径、不拉起任何进程（"复制路径"用它）
+    reveal:      (id, open = true) => j('POST', `/api/files/${id}/reveal?open=${open}`),
     delMany:     (fileIds, withDisk = true) =>
                    j('POST', '/api/files/delete', { fileIds, withDisk }),
     tasks:       () => j('GET', '/api/tasks/queue'),
@@ -300,6 +302,7 @@ const CTX = (() => {
       { k: 'rename',  label: '按标签重命名',  key: 'F2',   act: () => run('rename', file.id, { pattern: '{artist} - {title}' }) },
       { k: 'verify',  label: 'FLAC 完整性校验',           act: () => run('verify', file.id), disabled: !isFlac },
       { k: 'reveal',  label: '显示所在目录',              act: () => revealFile(file) },
+      { k: 'copypath', label: '复制文件路径',             act: () => copyFilePath(file) },
       { sep: true },
       { k: 'del',     label: '删除文件…',    key: 'Del',   act: () => confirmDelete(file), danger: true },
     ];
@@ -407,12 +410,33 @@ const CTX = (() => {
     inp.click();
   }
 
+  /** 在文件管理器里打开并选中工作副本。
+   *
+   *  以前这里只是把 `file.relPath`（相对 uploads/ 的路径）写进剪贴板 ——
+   *  既不绝对、也不是"目录"。现在交给后端去拉 explorer /select，
+   *  路径由后端从库里算（接口只收 fid），客户端碰不到任意路径。
+   *
+   *  打开的是 **uploads/ 里的工作副本**，不是导入前的原文件；而 uploads/ 默认
+   *  每次启动都会被清空，所以 toast 里把这件事说清楚，别让人以为能靠它找回原曲。 */
   async function revealFile(file) {
     try {
-      await navigator.clipboard.writeText(file.relPath || file.name);
-      toast('路径已复制', file.relPath || file.name);
-    } catch {
-      toast('文件位置', file.relPath || file.name);
+      const r = await API.reveal(file.id, true);
+      if (r.revealed) toast('已在文件管理器中选中', r.path);
+      else toast('已打开所在目录', `${r.path}（当前系统不支持"选中"，只打开了目录）`);
+    } catch (e) {
+      // 打不开（工作副本被清掉 / 不支持）就退回复制路径，别让这一项变成死的
+      await copyFilePath(file, String(e.message || e));
+    }
+  }
+
+  /** 复制工作副本的**绝对**路径（open=false：不拉起任何进程） */
+  async function copyFilePath(file, why = '') {
+    try {
+      const r = await API.reveal(file.id, false);
+      await navigator.clipboard.writeText(r.path);
+      toast('路径已复制', why ? `${r.path}\n（${why}）` : r.path);
+    } catch (e) {
+      toast('路径不可用', String((e && e.message) || e || why), 'error');
     }
   }
 

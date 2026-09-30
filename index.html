@@ -5,7 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AudioEdition · 基于 ffmpeg/flac 的音频工具箱</title>
 <link rel="stylesheet" href="theme.css">
-<link rel="stylesheet" href="app.css">
+<!-- app.css 按原分节横幅拆成 9 个文件。**顺序不能改**：
+     层叠结果与拆分前逐个字节等价（见 布局规格.md「样式表的拆分」）。
+     校验方法：按下面顺序拼接应等于 git show HEAD:app.css -->
+<link rel="stylesheet" href="css/base.css">
+<link rel="stylesheet" href="css/common.css">
+<link rel="stylesheet" href="css/header.css">
+<link rel="stylesheet" href="css/layout.css">
+<link rel="stylesheet" href="css/filecard.css">
+<link rel="stylesheet" href="css/drawer.css">
+<link rel="stylesheet" href="css/cardlib.css">
+<link rel="stylesheet" href="css/overlays.css">
+<link rel="stylesheet" href="css/editor.css">
 </head>
 <body>
 

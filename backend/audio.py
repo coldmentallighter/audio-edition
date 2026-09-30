@@ -239,6 +239,10 @@ class TagWriteResult:
     removed: int = 0
     method: str = ""
     error: str = ""
+    # 「这个容器压根不支持标签」要和「写入时出错了」分开：
+    # 前者是**预期**情况（AAC/图片…），HTTP 上该是 4xx；后者才是 5xx。
+    # 用标志位而不是去匹配 error 字符串 —— 字符串一改就悄悄失效。
+    unsupported: bool = False
 
     @property
     def ok(self) -> bool:
@@ -298,6 +302,7 @@ def _write_tags_mutagen(path: Path, tags: dict[str, str], clear_missing: bool) -
         f = mutagen.File(str(path), easy=True)
         if f is None:
             res.error = f"mutagen 无法识别 {path.suffix}"
+            res.unsupported = True
             return res
         if f.tags is None:
             try:
@@ -305,7 +310,17 @@ def _write_tags_mutagen(path: Path, tags: dict[str, str], clear_missing: bool) -
             except Exception as e:
                 # AAC 之类根本不支持标签：必须报出来，不能假装写完
                 res.error = f"{path.suffix} 不支持写入标签（{e}）"
+                res.unsupported = True
                 return res
+
+        # mutagen 把 f.tags 标成 Optional，且 add_tags() 不保证一定生效
+        # （个别实现会静默失败）。取局部引用并在这里一次性挡掉 None，
+        # 后面就不用每处 in / del / [] 都重复判断了。
+        tags_obj = f.tags
+        if tags_obj is None:
+            res.error = f"{path.suffix} 不支持写入标签（add_tags 未生效）"
+            res.unsupported = True
+            return res
 
         id3_mode = path.suffix.lower() in ID3_EXT
         failed: list[str] = []
@@ -326,17 +341,17 @@ def _write_tags_mutagen(path: Path, tags: dict[str, str], clear_missing: bool) -
         if clear_missing:
             if id3_mode:
                 for fid, easy in ID3_FRAMES_REV.items():
-                    if easy not in tags and fid in f.tags:
-                        del f.tags[fid]
+                    if easy not in tags and fid in tags_obj:
+                        del tags_obj[fid]
                         res.removed += 1
-                if "comment" not in tags and "COMM" in f.tags:
-                    del f.tags["COMM"]
+                if "comment" not in tags and "COMM" in tags_obj:
+                    del tags_obj["COMM"]
                     res.removed += 1
             else:
-                for k in list(f.tags or {}):
+                for k in list(tags_obj):
                     if CANON_KEYS.get(str(k).lower()) in UI_FIELDS and k not in tags:
                         try:
-                            del f[k]
+                            del tags_obj[k]
                             res.removed += 1
                         except Exception:
                             pass

@@ -108,6 +108,24 @@
       if (coverTypes.has(t.type)) seenBefore.add(t.id);
     }
 
+    // 每个 op 提交完要**等它的任务跑完**再提交下一个。
+    // 不等的话，embed 和 extract 会作为两个并发任务（队列 2 worker）同时动同一个文件：
+    // embed 正在重写封面时 extract 去读，就会读到"没有内嵌封面"而失败 ——
+    // 那是探针自己造出来的竞态，不是页面的 bug（实测确实这样翻过一次车）。
+    const TERMINAL = new Set(['success', 'failed', 'cancelled']);
+    async function settle(r, timeout = 60000) {
+      const ids = (r && (r.taskIds || (r.taskId ? [r.taskId] : []))) || [];
+      const t0 = Date.now();
+      for (const id of ids) {
+        while (Date.now() - t0 < timeout) {
+          let t = null;
+          try { t = await realFetch(`/api/tasks/${id}`).then(x => x.json()); } catch { break; }
+          if (!t || TERMINAL.has(t.state)) break;
+          await wait(120);
+        }
+      }
+    }
+
     for (const card of sample) {
       calls.length = 0;
       const el = [...document.querySelectorAll('#cardSections [data-card]')]
@@ -119,6 +137,7 @@
         if (!params) { failed.push({ name: card.name, op: card.op, why: 'resolveCardParams 返回 null' }); continue; }
         const tgt = targetFor(card.op);
         const r = await API.op(card.op, { fileIds: [tgt.id], ...params });
+        await settle(r);
         picked.push({ name: card.name, op: card.op, file: labelOf(tgt), total: r.total ?? r.count ?? '?' });
       } catch (e) {
         failed.push({ name: card.name, op: card.op, why: String(e.message || e) });

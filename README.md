@@ -36,7 +36,7 @@ cd audio-edition
 
 ### 1. 前端零构建、零依赖
 
-`index.html` + `app.css` + `app.js` + `api.js` + `theme.css`，原生 HTML/CSS/JS，
+`index.html` + `css/*.css` + `app.js` + `api.js` + `theme.css`，原生 HTML/CSS/JS，
 **没有 npm、没有打包器、没有框架**。改完直接刷新页面就生效。
 选这条路的理由：本地工具的寿命通常比前端工具链长，不需要为了一个滑块引入 200MB 的 `node_modules`。
 
@@ -74,7 +74,7 @@ cd audio-edition
 
 不靠肉眼看页面。六套脚本 + 15 个浏览器探针：
 
-- **163 项**后端接口（含路径穿越防护、中文文件名、真实转码产出）
+- **173 项**后端接口（含路径穿越防护、中文文件名、真实转码产出）
 - **36 项**波形 PNG（解出 RGBA 原始像素，逐点统计 alpha 与颜色）
 - **93 项**配色（读落盘的 `theme.css` 复算 6 套主题的全部对比度）
 - **19 项**卡片扩容（位深的实际 codec / 采样格式 / bits_per_raw_sample、重命名的精确文件名、4K 波形尺寸）
@@ -139,7 +139,13 @@ WAV 32bit 浮点、5.1 环绕、8k 提示音素材、FLAC 极限压缩……）�
 | **试听** | 内置播放器：播放/暂停、**点击波形跳转**、播放指针跟随、音量滑块 |
 | **队列** | 2 并发执行、实时进度、失败重试、运行日志（SSE + 轮询双通道） |
 | **批量** | 批量转换 / 改标签 / 嵌封面 / 标准化 / 重命名 / 打包 ZIP / **删除** |
+| **文件右键** | 转换 / 标准化 / 嵌封面 / 重建峰值 / 按标签重命名 / 完整性校验 / **显示所在目录（在资源管理器里选中工作副本）** / 复制文件路径 / 删除 |
 | **其他** | FLAC 完整性校验、打包 ZIP、产物可下载、6 套主题、深浅色切换 |
+
+> **「显示所在目录」打开的是 `uploads/` 里的工作副本，不是导入前的原文件** ——
+> 接口只收文件 id，路径由后端从库里算并校验（永远落在 `uploads/` 内），
+> 所以前端无法让它去打开任意路径。而 `uploads/` 默认每次启动都会被清空，
+> 也就是说这一项的含义是"去取出这份副本"。详见 `布局规格.md` §14。
 
 ---
 
@@ -376,20 +382,39 @@ audio-edition/
 ├── requirements.txt          Python 依赖（已验证版本作为下限）
 ├── LICENSE                   MIT
 ├── index.html                页面骨架（无构建，直接引用下面几个文件）
-├── app.css                   布局与组件样式
 ├── app.js                    视图与交互（抽屉、波形、播放器、卡片编辑器…）
 ├── api.js                    API 封装、拖拽导入、右键菜单、轮询
 ├── theme.css                 6 套主题 × 21 个设计令牌
+├── css/                      样式表，按原分节横幅拆分（**顺序不能改**）
+│   ├── base.css              契约 + 重置 + 滚动条
+│   ├── common.css            通用件：按钮 / 输入 / 徽章 / 进度
+│   ├── header.css            顶栏 + 执行链 + 音量
+│   ├── layout.css            侧栏 + 工作区
+│   ├── filecard.css          文件卡片：波形 / 传输 / 元数据 / 状态
+│   ├── drawer.css            抽屉 + 快照条
+│   ├── cardlib.css           卡片库：基础 / 光标跟随 / 点击反馈 / 对勾
+│   ├── overlays.css          拖拽导入 / 上传进度 / 右键菜单 / 通知 / 模态
+│   └── editor.css            卡片编辑器 + 响应式
 │
 ├── backend/
-│   ├── app.py                FastAPI 路由（38 条路径 / 45 个端点）
+│   ├── app.py                应用骨架：生命周期 / CORS / 路由装配 / 静态挂载 / 入口
+│   ├── routers/              接口按域拆分（38 条路径 / 45 个端点）
+│   │   ├── system.py         健康检查 / 配置 / 日志 / SSE 事件流
+│   │   ├── catalog.py        操作目录、卡片 CRUD、快照
+│   │   ├── files.py          上传、文件列表、标签、封面、峰值、下载、批量删除
+│   │   ├── task_queue.py     任务队列查询与重试/取消（不叫 tasks，避免与下面撞名）
+│   │   └── ops.py            12 个 op 的提交入口 POST /api/ops/<route>
+│   ├── cards/                卡片目录按职责拆分
+│   │   ├── specs.py          参数规格（前端表单的唯一来源）
+│   │   ├── builtin.py        69 张内置卡片
+│   │   ├── validate.py       卡片校验 + 命令预览
+│   │   └── store.py          自定义卡片与快照的持久化（cards.json）
 │   ├── config.py             路径约束、白名单、safe_join、启动清空工作区
 │   ├── store.py              SQLite 表结构与查询
 │   ├── queue.py              有界并发任务队列
 │   ├── tasks.py              12 个任务处理器 + 参数白名单
 │   ├── runner.py             subprocess 封装（文本 / 二进制两条路）
 │   ├── audio.py              ffmpeg/metaflac/mutagen 音频操作
-│   ├── cards.py              卡片目录、参数规格、自定义卡片与快照持久化
 │   ├── logs.py               运行日志环形缓冲
 │   └── toolchain.py          工具链探测与版本
 │
@@ -404,6 +429,10 @@ audio-edition/
 └── audioedition.db           SQLite（启动重建）
 ```
 
+> **`backend/cards/` 对外 API 与拆分前的 `backend/cards.py` 完全一致** ——
+> `__init__.py` 把 21 个公开名字全部重导出，所以 `app.py` 和测试里的 `cards.xxx` 调用一行都没改。
+> 依赖是单向的：`specs → builtin → validate → store`，没有循环。
+
 ---
 
 ## 七、自检
@@ -412,13 +441,18 @@ audio-edition/
 # 先起服务（另开一个窗口），再跑：
 $env:PYTHONIOENCODING='utf-8'; chcp 65001 | Out-Null
 
-python tests/smoke_api.py           # 163 项：接口、上传、转码、封面、批量删除、卡片 CRUD
+python tests/smoke_api.py           # 173 项：接口、上传、转码、封面、批量删除、卡片 CRUD
 python tests/waveform_check.py      #  36 项：波形 PNG 逐像素验证
 python tests/theme_check.py         #  93 项：6 套主题对比度与可见度
 python tests/axis_a_check.py        #  19 项：位深 / 重命名零填充 / 4K 波形 / 12 op 参数透传
 python tests/snapshot_drag_real.py  #  12 项：真实拖拽（CDP）
+python tests/halftone_check.py      #  27 项：卡片 hover 的 AM 网点（CDP 截图 + 周期/点径）
+python tests/reveal_cmd_check.py    #  30 项：「显示所在目录」拼出的命令行形式（不弹窗）
 python tests/palette_regen.py       #  改色板时用来推导新令牌
 ```
+
+> `halftone_check.py` 是唯一**必须看渲染结果**的脚本：computed style 只能证明 CSS 写对了，
+> 证明不了"看起来是网点"，所以它截图后解像素、对亮度做自相关（见 `tests/README.md` §1d）。
 
 浏览器探针（14 个回归 + 1 个级联诊断）覆盖抽屉几何、手势、播放器、音量、封面、
 卡片编辑器、配色落地、69 张卡片渲染与 12 个 op 的实际执行等，用法见 `tests/README.md`。

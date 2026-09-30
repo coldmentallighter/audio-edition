@@ -129,6 +129,11 @@ class FileRow:
             "state": self.state,
             "info": self.info,
             "tasks": self.task_summary,
+            # audio / image / other —— 前端靠它决定"要不要拉波形"。
+            # 库里允许放图片（嵌封面要用），而图片**没有音频流**，拉 /peaks 必然
+            # 解码失败；不给前端一个判据，它就只能对每个文件都试一遍，然后失败重试。
+            "kind": ("audio" if config.is_audio(self.path)
+                     else "image" if config.is_image(self.path) else "other"),
             "createdAt": self.created_at,
             "updatedAt": self.updated_at,
         }

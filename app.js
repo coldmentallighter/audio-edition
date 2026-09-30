@@ -1225,16 +1225,22 @@ function drawWave(canvas, id) {
   const gap = 1.5;
 
   if (!data || !Array.isArray(data.peaks) || !data.peaks.length) {
-    // 无峰值数据：画一条中线 + 提示，不画假波形
+    // 无峰值数据：画一条中线 + 提示，不画假波形。
+    // 非音频文件要说清楚是"压根没有波形"，而不是建议他"重建峰值图" ——
+    // 对一张封面图来说，那个建议是错的。
     for (let lane = 0; lane < 2; lane++) {
       const cy = lane * laneH + laneH / 2;
       ctx.fillStyle = tok('--border');
       ctx.fillRect(0, cy, w, 1);
     }
+    const notAudio = f.kind && f.kind !== 'audio';
+    const msg = notAudio
+      ? `${f.kind === 'image' ? '图片' : '非音频文件'} · 没有波形`
+      : '暂无峰值数据 · 右键卡片可「重建峰值图」';
     ctx.fillStyle = tok('--text-muted') || tok('--ink');
     ctx.font = '11px ' + cssVar('--font-sans');
     ctx.textAlign = 'center';
-    ctx.fillText('暂无峰值数据 · 右键卡片可「重建峰值图」', w / 2, h / 2 + 4);
+    ctx.fillText(msg, w / 2, h / 2 + 4);
     ctx.textAlign = 'left';
     return;
   }
@@ -1513,6 +1519,7 @@ function renderCardSections(q = '') {
       // 这一段以前只渲染「新建」按钮、return 得很早，
       // 结果 cat='自定义' 的自定义卡片建出来之后**根本不显示**。
       const extra = `<button class="fcard fcard--new" id="newCard">
+          <span class="fcard__dots" aria-hidden="true"></span>
           <span class="fcard__ico">${svg('wave')}</span>
           <span class="fcard__name">新建自定义卡片</span>
           <span class="fcard__desc">选基础操作 → 填参数 → 命名保存</span>
@@ -1585,6 +1592,7 @@ function cardHTML(c) {
   return `<button class="fcard${c.custom ? ' fcard--custom' : ''}" data-card="${c.name}"
                   draggable="true"
                   title="点击加入执行链 · 右键编辑 · 拖到顶部快照可替换">
+      <span class="fcard__dots" aria-hidden="true"></span>
       <span class="fcard__top">
         <span class="fcard__ico">${svg(c.ico)}</span>
         <span class="fcard__name">${c.name}</span>
@@ -2403,6 +2411,7 @@ window.applyServerFiles = function (files) {
     const tg = info.tags || {};
     FILES.push({
       id: f.id,
+      kind: f.kind || 'audio',        // audio / image / other —— 决定要不要拉波形
       title: tg.title || f.name.replace(/\.[^.]+$/, ''),
       artist: tg.artist || '—',
       album: tg.album || '—',
@@ -2456,6 +2465,9 @@ const peakCache = new Map();
 async function loadAllPeaks() {
   if (typeof API === 'undefined') return;
   for (const f of FILES) {
+    // 图片这类非音频文件**没有音频流**，拉 /peaks 只会拿到 415。
+    // 以前照拉不误，每刷新一次列表就失败重试一遍（实测日志里上百条 500）。
+    if (f.kind !== 'audio') { f.peaks = 'not-audio'; continue; }
     if (peakCache.has(f.id)) { f.peaks = 'cached'; continue; }
     try {
       const d = await API.peaks(f.id, 1000);
