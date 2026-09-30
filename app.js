@@ -494,7 +494,7 @@ async function openCardEditor(card, mode) {
 
   $('#cardSave').textContent = (mode === 'edit' && card && card.custom) ? '保存' : '创建卡片';
 
-  $('#cardModal').hidden = false;
+  openModal($('#cardModal'));
   refreshPreview();
   setTimeout(() => $('#cardName').focus(), 30);
 }
@@ -528,7 +528,7 @@ async function saveCard(asNew) {
       : await API.createCard(payload);
     addLog(`✚ 卡片「${r.card.name}」已${isCustomEdit ? '更新' : '创建'} · ${r.card.op}`, 'ok');
     toast(isCustomEdit ? '卡片已更新' : '卡片已创建', r.card.name);
-    $('#cardModal').hidden = true;
+    closeModal($('#cardModal'));
     await reloadCards();
   } catch (e) {
     showCardErr(String(e.message || e));
@@ -545,7 +545,7 @@ async function deleteCard() {
     await API.deleteCard(card.id);
     addLog(`🗑 卡片「${card.name}」已删除`, 'warn');
     toast('卡片已删除', card.name);
-    $('#cardModal').hidden = true;
+    closeModal($('#cardModal'));
     await reloadCards();
   } catch (e) {
     showCardErr(String(e.message || e));
@@ -1694,6 +1694,25 @@ const META_FIELDS = [
 let metaEditId = null;
 let metaCloseTimer = null;
 /** 打开元数据编辑：有后端时拉真实标签，否则退回本地 mock */
+const _modalTimers = new WeakMap();
+
+function openModal(el) {
+  clearTimeout(_modalTimers.get(el));
+  _modalTimers.delete(el);
+  el.classList.remove('is-open');
+  el.hidden = false;
+  void el.offsetWidth;                              // 强制回流，让 transition 有起点
+  requestAnimationFrame(() => el.classList.add('is-open'));
+}
+
+function closeModal(el) {
+  el.classList.remove('is-open');
+  clearTimeout(_modalTimers.get(el));               // 防抖：关-开-关 连点时不会误隐藏
+  _modalTimers.set(el, setTimeout(() => {
+    el.hidden = true;
+    _modalTimers.delete(el);
+  }, 200));                                          // 与 CSS 过渡时长一致
+}
 async function openMeta(id) {
 
   const f = FILES.find(x => x.id === id);
@@ -2076,9 +2095,16 @@ function bind() {
     $$('#cardIcons .iconpick__btn').forEach(x => x.setAttribute('aria-checked', String(x === b)));
   });
 
+  // 卡片编辑器（#cardModal）—— 取消按钮关的是它自己
   $('#cardModal').addEventListener('click', e => {
-    if (e.target.closest('[data-close]')) closeMeta(); 
+    if (e.target.closest('[data-close]')) closeModal($('#cardModal'));
   });
+  
+  // 元数据编辑器（#metaModal）—— 取消按钮关它自己
+  $('#metaModal').addEventListener('click', e => {
+    if (e.target.closest('[data-close]')) closeMeta();
+  });
+  $('#metaSave').addEventListener('click', () => { saveMeta(); });
 
   // 文件卡片：勾选 / 聚焦 / 点元数据框开编辑
   $('#fileList').addEventListener('click', e => {
@@ -2116,10 +2142,34 @@ function bind() {
   });
 
   // 元数据框：点击（或回车/空格）打开编辑模态
+  // 文件卡片：勾选 / 聚焦 / 点元数据框开编辑
   $('#fileList').addEventListener('keydown', e => {
+    // 元数据框：Enter / 空格 打开编辑
     const box = e.target.closest('.metabox');
-    if (!box) return;
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openMeta(box.dataset.edit); }
+    if (box && (e.key === 'Enter' || e.key === ' ')) {
+      e.preventDefault();
+      openMeta(box.dataset.edit);
+      return;
+    }
+  
+    // 空格：切播放/暂停
+    if (e.key !== ' ') return;
+  
+    // ① 焦点在播放按钮上
+    //    不 preventDefault 的话，keyup 还会补一次 click → 一按切两次
+    const playBtn = e.target.closest('[data-play-toggle]');
+    if (playBtn) {
+      e.preventDefault();
+      togglePlay(playBtn.dataset.playToggle);
+      return;
+    }
+  
+    // ② 焦点在卡片本身上（tabindex="0"），且不在任何控件内 → 空格也切播放
+    const card = e.target.closest('.card');
+    if (card && !e.target.closest('button, input, textarea, select, [contenteditable]')) {
+      e.preventDefault();
+      togglePlay(card.dataset.id);
+    }
   });
 
   // 封面格：点「导入/更换」选图并嵌入；点「移除」调 remove-cover。
@@ -2155,11 +2205,6 @@ function bind() {
   // 通知
   $('#noticeClose').addEventListener('click', () => { $('#notice').hidden = true; });
 
-  // 模态
-  $('#metaModal').addEventListener('click', e => {
-    if (e.target.closest('[data-close]')) closeMeta(); 
-  });
-  $('#metaSave').addEventListener('click', () => { saveMeta(); });
 
   // 侧栏分隔条拖拽
   const pane = $('.pane--queue');

@@ -169,9 +169,12 @@
         <div class="drawer__head">
           <h2 class="drawer__title">功能卡片</h2>
           <span class="drawer__scope" id="drawerScope">未选中文件</span>
+          <!-- 新增：全部展开/收起 -->
+          <button class="btn btn--ghost btn--xs" id="cardsecToggleAll" type="button">全部收起</button>
           <button class="btn btn--ghost btn--xs" id="drawerClose">收起</button>
         </div>
 
+        <!-- 卡片分组容器：由 app.js 渲染，每个 .cardsec 都支持折叠 -->
         <div class="drawer__cards" id="cardSections"><!-- app.js --></div>
       </div>
 
