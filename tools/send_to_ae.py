@@ -14,7 +14,7 @@
     2. 展开文件夹、按扩展名白名单预过滤
     3. 按字节/个数分批 POST，避免撞 MAX_BATCH_FILES=500 与内存
     4. 打印 saved / skipped / errors，失败不静默
-    5. 打开浏览器
+    5. 打开浏览器；探测交给前端已有的流程
 """
 import os
 import sys
@@ -70,10 +70,8 @@ def start_service():
     健康检查成功后才开浏览器。出错会 pause 在窗口里，不会被吞。
     """
     env = os.environ.copy()
-    env["AE_FRESH"] = "0"  # 关键：run.bat 不覆盖此变量，会一路传到后端
-    env["AE_NO_BROWSER"] = "1"
-    # run.bat 对 AE_HOST / AE_PORT 用的是 "if not defined"，
-    # 所以这里 setdefault 只是补默认值，不会覆盖用户已设的。
+    env["AE_FRESH"] = "0"       # 关键：run.bat 不覆盖此变量，会一路传到后端
+    env["AE_NO_BROWSER"] = "1"  # 由脚本负责开浏览器，避免开两个 tab
     env.setdefault("AE_HOST", "127.0.0.1")
     env.setdefault("AE_PORT", "8765")
 
@@ -82,8 +80,6 @@ def start_service():
         if not bat.exists():
             print(f"找不到 {bat}", file=sys.stderr)
             return False
-        # CREATE_NEW_CONSOLE：给 run.bat 一个自己的窗口，
-        # 用户能看到启动横幅、能 Ctrl+C 停、出错能看见 pause。
         subprocess.Popen(
             ["cmd", "/c", str(bat)],
             cwd=str(ROOT),
@@ -156,10 +152,7 @@ def post_batch(files):
     boundary = "----AE" + uuid.uuid4().hex
     parts = []
 
-    # 1) files 字段：每个文件一个 part
     for abs_path, _rel in files:
-        # filename 用 basename（UTF-8），目录结构走 paths 字段；
-        # 后端 fallback 时也不至于丢名字。
         filename = Path(abs_path).name
         parts.append(f"--{boundary}\r\n".encode("utf-8"))
         parts.append(
@@ -170,16 +163,14 @@ def post_batch(files):
         parts.append(abs_path.read_bytes())
         parts.append(b"\r\n")
 
-    # 2) paths 字段：JSON 数组，与 files 下标一一对应
     rel_list = [rel for _abs, rel in files]
     parts.append(f"--{boundary}\r\n".encode("utf-8"))
     parts.append(b'Content-Disposition: form-data; name="paths"\r\n\r\n')
     parts.append(json.dumps(rel_list, ensure_ascii=False).encode("utf-8"))
     parts.append(b"\r\n")
-
     parts.append(f"--{boundary}--\r\n".encode("utf-8"))
-    body = b"".join(parts)
 
+    body = b"".join(parts)
     req = urllib.request.Request(
         UPLOAD_URL,
         data=body,
@@ -189,39 +180,33 @@ def post_batch(files):
     with urllib.request.urlopen(req, timeout=UPLOAD_TIMEOUT) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
-PROBE_TIMEOUT = 600   # 单个大无损文件算响度可能要几十秒，给宽
+def browser_is_active(max_age=5.0):
+    """页面若在最近 5 秒内打过心跳，就认为有活跃 tab。"""
+    try:
+        with urllib.request.urlopen(HEALTH_URL, timeout=0.6) as r:
+            d = json.loads(r.read())
+        return bool(d.get("browser_active"))
+    except Exception:
+        return False
 
-def _get_json(url, data=None, method="GET", timeout=30):
-    req = urllib.request.Request(url, data=data, method=method)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8"))
-
-def list_unprobed_ids():
-    """返回所有 info 为空的文件 id（= 尚未完成元数据/响度探测）。"""
-    files = _get_json(f"{BASE}/api/files").get("files") or []
-    return [
-        f["id"] for f in files
-        if f.get("id") and not f.get("info")
-    ]
-
-def probe_file(fid):
-    """触发后端探测：元数据 + 响度。同步返回。"""
-    return _get_json(f"{BASE}/api/files/{fid}/probe",
-                     data=b"", method="POST", timeout=PROBE_TIMEOUT)
-    
-    
 # ── 主流程 ────────────────────────────────────────────────────────────
 def main():
     args = sys.argv[1:]
     if not args:
         return 0
 
+    started_by_us = False
     if not service_alive():
         if not start_service():
             return 1
         if not wait_ready(timeout=60):
-            print(...)  # 原样保留
+            print(
+                "AudioEdition 未能在 60 秒内就绪。\n"
+                "请查看刚弹出的 run.bat 窗口——错误会 pause 在那里。",
+                file=sys.stderr,
+            )
             return 1
+        started_by_us = True
 
     files, pre_skipped = collect(args)
 
@@ -257,30 +242,8 @@ def main():
 
     print(f"导入 {saved}，跳过 {skipped}，失败 {errors}")
 
-    # ── 触发探测：元数据 + 响度 ────────────────────────────
-    # 浏览器侧同样是在 GET /api/files 之后逐个 POST /api/files/{id}/probe
-    try:
-        targets = list_unprobed_ids()
-    except Exception as e:
-        print(f"拉取文件列表失败，跳过探测: {type(e).__name__}: {e}", file=sys.stderr)
-        targets = []
-
-    if targets:
-        print(f"探测 {len(targets)} 个未解析文件的元数据/响度…")
-        ok = bad = 0
-        for fid in targets:
-            try:
-                probe_file(fid)
-                ok += 1
-            except urllib.error.HTTPError as e:
-                print(f"  probe {fid} HTTP {e.code}: {e.read()[:200]!r}", file=sys.stderr)
-                bad += 1
-            except Exception as e:
-                print(f"  probe {fid} {type(e).__name__}: {e}", file=sys.stderr)
-                bad += 1
-        print(f"探测完成：{ok} 成功，{bad} 失败")
-
-    webbrowser.open(BASE)
+    if not browser_is_active():
+        webbrowser.open(BASE)
     return 0
 
 

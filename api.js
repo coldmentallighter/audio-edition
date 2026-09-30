@@ -28,6 +28,7 @@ const API = (() => {
   }
   return {
     health:      () => j('GET', '/api/health'),
+    heartbeat:   () => j('GET', '/api/heartbeat'),
     cards:       () => j('GET', '/api/cards'),
     logs:        (since = 0) => j('GET', `/api/logs?since=${since}`),
     clearLogs:   () => j('DELETE', '/api/logs'),
@@ -574,6 +575,18 @@ const App = (() => {
     startEvents();
     setInterval(pollLogs, 1500);
     setInterval(refreshQueue, 2000);
+    setInterval(() => { API.heartbeat().catch(() => {}); }, 2000);
+    // 轮询：外部（脚本 / 右键菜单）上传的文件会自动出现，
+    // 并对 info 为空对象 {} 的新文件补 probe。
+    async function syncAndProbe() {
+      await reloadFiles();
+      const needProbe = cache
+        .filter((f) => !f.info || typeof f.info !== 'object' || Object.keys(f.info).length === 0)
+        .map((f) => f.id);
+      if (needProbe.length) autoProbe(needProbe);
+    }
+    setInterval(syncAndProbe, 2000);
+    syncAndProbe();   // 启动时立即跑一次
   }
 
   return { boot, reloadFiles, refreshQueue, fileById, autoProbe, pollLogs,

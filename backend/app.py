@@ -21,7 +21,8 @@ from backend.toolchain import ToolchainError, toolchain
 
 # 屏蔽第三方库的弃用噪音，保持控制台干净（本地工具，用户要看得清自己的日志）
 warnings.filterwarnings("ignore", category=DeprecationWarning)
-
+import time as _time
+LAST_BROWSER_SEEN = 0.0
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
@@ -80,8 +81,14 @@ def health() -> dict:
         "tools": tc.as_dict(),
         "server": config.SERVER.as_dict(),
         "queue": q_mod.queue_.stats(),
+        "browser_active": (_time.time() - LAST_BROWSER_SEEN) < 5.0,
     }
 
+@app.get("/api/heartbeat")
+async def heartbeat() -> dict:
+    global LAST_BROWSER_SEEN
+    LAST_BROWSER_SEEN = _time.time()
+    return {"ok": True}
 
 @app.get("/api/config")
 def get_config() -> dict:
