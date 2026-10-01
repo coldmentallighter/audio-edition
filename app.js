@@ -1917,7 +1917,33 @@ function bind() {
       localStorage.setItem('ae-mode', wasDark ? 'light' : 'dark');
     });
   });
-  
+  // 3D 跟随开关：关掉后卡片 / 快照 / 模态框都不再随指针倾斜，
+  // 径向光晕和模态的旋入动画照旧（见 bindFollow 的注释）
+  const fxBtn = $('#fxToggle');
+  if (fxBtn) {
+    const paintFx = () => {
+      const on = document.documentElement.dataset.fx !== 'off';
+      fxBtn.setAttribute('aria-pressed', String(on));
+      fxBtn.title = on ? '关闭 3D 跟随效果' : '开启 3D 跟随效果';
+    };
+    fxBtn.addEventListener('click', () => {
+      const on = document.documentElement.dataset.fx !== 'off';   // 当前状态
+      if (on) document.documentElement.dataset.fx = 'off';
+      else delete document.documentElement.dataset.fx;
+      localStorage.setItem('ae-fx3d', on ? 'off' : 'on');
+
+      // 切到"关"时立刻归零：鼠标正停在卡片/模态上不动的话，
+      // 光靠下一次 pointermove 才生效会有明显的滞后感
+      if (on) {
+        $$('#cardSections .fcard, .snap, .modal__box').forEach(el => {
+          el.style.setProperty('--nx', '0');
+          el.style.setProperty('--ny', '0');
+        });
+      }
+      paintFx();
+    });
+    paintFx();
+  }
   // 抽屉
   // 注意：把手不绑 click —— 点击/拖拽统一由下面的 pointer* 逻辑处理，
   // 否则 click 会与 pointerup 各切换一次，表现为「点了没反应」。
@@ -2619,6 +2645,17 @@ function bindFollow(container, itemSelector) {
   container.dataset.followBound = '1';
   if (!window.matchMedia('(hover: hover)').matches) return;
 
+  /* 3D 开关关掉时：--mx/--my 照写（径向光晕要用），
+     但 --nx/--ny 一律写 0 —— 而不是"跳过不写"。
+     跳过的话，按下开关那一刻元素上残留的旧值会一直生效，
+     直到指针下一次移动，表现为"按了按钮，卡片/模态还歪着"。
+     写 0 之后，所有消费这两个变量的 calc() 自然归零：
+       · 卡片   → perspective + rotateX/rotateY + translate3d 全成恒等
+       · 模态框 → rotateX(calc(var(--enter-rx) + 0))，旋入动画原封不动
+       · 快照   → 同上
+     这就是为什么这件事不能放在 CSS 里一刀切（见 header.css 的说明）。 */
+  const fxOff = () => document.documentElement.dataset.fx === 'off';
+
   container.addEventListener('pointermove', (e) => {
     const el = e.target.closest(itemSelector);
     if (!el || !container.contains(el)) return;
@@ -2631,8 +2668,13 @@ function bindFollow(container, itemSelector) {
 
     el.style.setProperty('--mx', x + 'px');
     el.style.setProperty('--my', y + 'px');
-    el.style.setProperty('--nx', ((x / w) * 2 - 1).toFixed(3));
-    el.style.setProperty('--ny', ((y / h) * 2 - 1).toFixed(3));
+    if (fxOff()) {
+      el.style.setProperty('--nx', '0');
+      el.style.setProperty('--ny', '0');
+    } else {
+      el.style.setProperty('--nx', ((x / w) * 2 - 1).toFixed(3));
+      el.style.setProperty('--ny', ((y / h) * 2 - 1).toFixed(3));
+    }
   });
 
   container.addEventListener('pointerout', (e) => {
@@ -2712,7 +2754,9 @@ function init() {
     $$('[data-set-theme]').forEach(x => x.setAttribute('aria-pressed', String(x.dataset.setTheme === t)));
   }
   if (localStorage.getItem('ae-mode') === 'dark') document.documentElement.dataset.mode = 'dark';
-
+  if (localStorage.getItem('ae-mode') === 'dark') document.documentElement.dataset.mode = 'dark';
+  // 3D 跟随开关：默认开；用户关过就恢复成关
+  if (localStorage.getItem('ae-fx3d') === 'off') document.documentElement.dataset.fx = 'off';
   renderQueue();
   renderLogs();
   renderFiles();
