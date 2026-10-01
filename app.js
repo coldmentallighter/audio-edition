@@ -226,7 +226,7 @@ function coverHTML(f) {
 
 function renderFiles() {
   $('#fileList').innerHTML = FILES.map(f => `
-  <article class="card${f.checked ? ' is-checked' : ''}" data-id="${f.id}" tabindex="0">
+  <article class="card${f.checked ? ' is-checked' : ''}${playingId === f.id ? ' is-playing' : ''}" data-id="${f.id}" tabindex="0">
     <label class="check card__pick" title="选中以批量操作">
       <input type="checkbox" data-check="${f.id}" ${f.checked ? 'checked' : ''}>
       <span></span>
@@ -1746,14 +1746,26 @@ function setFocused(id) {
 /* ------------------------------------------------------------- 通知 */
 
 let noticeTimer = null;
+
+function hideNotice() {
+  const n = $('#notice');
+  clearTimeout(noticeTimer);
+  noticeTimer = null;
+  n.classList.remove('is-open');
+  n.hidden = true;                    // 语义：辅助技术也认为它没了
+}
+
 function toast(title, msg = '', kind = 'info') {
   const n = $('#notice');
   $('#noticeTitle').textContent = title;
   $('#noticeMsg').textContent = msg;
   n.dataset.kind = kind;
-  n.hidden = false;
+
+  n.hidden = false;                   // 去掉 hidden（CSS 已覆盖成 flex，不影响布局）
+  n.classList.add('is-open');         // 已经在 is-open 时再加一次是 no-op，不会重播动画
+
   clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => { n.hidden = true; }, 4200);
+  noticeTimer = setTimeout(hideNotice, 4200);
 }
 
 /* ------------------------------------------------------------- 模态 */
@@ -2278,7 +2290,7 @@ function bind() {
   $('#clearLog').addEventListener('click', () => { $('#logList').innerHTML = ''; });
 
   // 通知
-  $('#noticeClose').addEventListener('click', () => { $('#notice').hidden = true; });
+  $('#noticeClose').addEventListener('click', hideNotice);
 
 
   // 侧栏分隔条拖拽
@@ -2405,6 +2417,12 @@ function bind() {
 /** 用后端文件列表替换本地 mock，并重绘卡片 */
 window.applyServerFiles = function (files) {
   const list = Array.isArray(files) ? files : [];
+  // 刷新不能吃掉勾选。api.js 的 syncAndProbe 每 2s 就 reloadFiles 一次，
+  // 而这里原来是硬写 checked:false —— 实测勾选**活不过 2 秒**
+  // （点一下 → 批量栏出现 → 2s 后批量栏自己消失），
+  // 批量操作因此只能在 2 秒内完成，等于不能用。
+  // 勾选是"用户的选择"，不是服务端数据，刷新时按 id 继承。
+  const wasChecked = new Set(FILES.filter((f) => f.checked).map((f) => f.id));
   FILES.length = 0;
   list.forEach((f) => {
     const info = f.info || {};
@@ -2426,7 +2444,7 @@ window.applyServerFiles = function (files) {
       progress: (f.tasks && f.tasks.progress) || 0,
       peaks: f._peaks || 'none',
       cover: !!info.hasCover,
-      checked: false,
+      checked: wasChecked.has(f.id),   // 已删除的文件自然不在新列表里，勾选随之消失
       err: (f.tasks && f.tasks.lastError) || '',
       _server: f,
     });
@@ -2708,7 +2726,8 @@ function init() {
   bindSectionToggles(); 
   initCardFollow(); 
   initSnapFollow();
-
+  bindFollow(document.getElementById('metaModal'), '.modal__box');
+  bindFollow(document.getElementById('cardModal'), '.modal__box');
   syncDrawerLeft();
   applyStop('closed');
   requestAnimationFrame(redrawAllWaves);

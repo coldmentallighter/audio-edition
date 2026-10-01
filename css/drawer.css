@@ -21,7 +21,7 @@
   inset: 0;
   z-index: 54;
 
-  background: color-mix(in srgb, var(--bg-app) 25%, transparent);
+  background: transparent;
   opacity: 0;
   pointer-events: none;
   transition:  .34s cubic-bezier(.16,1,.3,1);
@@ -29,15 +29,15 @@
 
 /* 可点击：除 closed 外所有档（中间档也能点，但此时还没模糊） */
 .drawer:not([data-stop="closed"]) ~ .drawer-backdrop {
-  backdrop-filter: blur(3px) saturate(100%);
-  -webkit-backdrop-filter: blur(3px) saturate(100%);
-  opacity: .5;  
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+  opacity: 1;  
 }
 
 /* 模糊：只在 full */
 .drawer[data-stop="full"] ~ .drawer-backdrop {
-  opacity: 1;
   pointer-events: auto;
+  background: rgba(0,0,0,0.1);
   backdrop-filter: blur(6px) saturate(120%);
   -webkit-backdrop-filter: blur(6px) saturate(120%);
 }
@@ -121,9 +121,7 @@
   position: relative;
   isolation: isolate;
 }
-.snap::before,
-.snap > .snap__dots,
-.snap > .snap__dots::before {
+.snap::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -137,16 +135,12 @@
   background-position: 0 0;
 }
 
-.snap:hover::before,
-.snap:hover > .snap__dots,
-.snap:hover > .snap__dots::before {
+.snap:hover::before {
   opacity: 1;
 }
 
 @supports (mask-image: none) or (-webkit-mask-image: none) {
-  .snap::before,
-  .snap > .snap__dots,
-  .snap > .snap__dots::before {
+  .snap::before {
     -webkit-mask-image: radial-gradient(circle at var(--mx, 50%) var(--my, 50%),
         rgb(0 0 0 / var(--spot-a1)) 0%,
         rgb(0 0 0 / var(--spot-a2)) calc(var(--spot-reach) * 0.62),
@@ -156,48 +150,27 @@
         rgb(0 0 0 / var(--spot-a2)) calc(var(--spot-reach) * 0.62),
         rgb(0 0 0 / var(--spot-a3)) var(--spot-reach));
   }
-
-  /* 画序：::before 最先 → 最小；.snap__dots::before 最后 → 最大（三层里的最大） */
   .snap::before {
     --spot-reach: var(--spot-reach-1);
     background-image: radial-gradient(circle closest-side,
       color-mix(in srgb, var(--spot-mix-alt) var(--spot-alt-a), transparent) 0 var(--spot-dot-1),
       transparent calc(var(--spot-dot-1) + 1%));
   }
-  .snap > .snap__dots {
-    --spot-reach: var(--spot-reach-2);
-    background-image: radial-gradient(circle closest-side,
-      var(--spot-mix-base-sn) 0 var(--spot-dot-2),
-      transparent calc(var(--spot-dot-2) + 1%));
-  }
-  .snap > .snap__dots::before {
-    --spot-reach: var(--spot-reach-3);
-    background-image: radial-gradient(circle closest-side,
-      var(--spot-mix-base-sn) 0 var(--spot-dot-3),
-      transparent calc(var(--spot-dot-3) + 1%));
-  }
 }
 
-.snap > .snap__dots { z-index: 0; }
 .snap > .snap__ico,
 .snap > .snap__txt { position: relative; z-index: 1; }
 
 @media (hover: none) {
-  .snap::before,
-  .snap > .snap__dots,
-  .snap > .snap__dots::before { display: none; }
+  .snap::before { display: none; }
 }
 /* 整卡 3D：幅度约为 fcard 的 1/3 */
 .snap:not(.snap--add) {
   transform:
-    perspective(800px)
-    translate3d(
+    translate(
       calc(var(--nx, 0) * 2px),
-      calc(var(--ny, 0) * 2px),
-      0
-    )
-    rotateX(calc(var(--ny, 0) * -2deg))
-    rotateY(calc(var(--nx, 0) *  2deg));
+      calc(var(--ny, 0) * 2px)
+    );
   transform-origin: center center;
   transition:
     transform .18s cubic-bezier(.22, .61, .36, 1),
@@ -231,20 +204,20 @@
 /* 图标轻微 3D 视差 + hover 阴影 */
 .snap:not(.snap--add) .snap__ico {
   transform:
-    perspective(400px)
-    translate3d(
+    translate(
       calc(var(--nx, 0) * 2px),
-      calc(var(--ny, 0) * 2px),
-      calc((var(--nx, 0) + var(--ny, 0)) * 2px)
-    )
-    rotateX(calc(var(--ny, 0) * -5deg))
-    rotateY(calc(var(--nx, 0) *  5deg));
+      calc(var(--ny, 0) * 2px)
+    );
   transition: transform .14s ease-out, box-shadow .22s ease;
   will-change: transform;
 }
 .snap:not(.snap--add):hover .snap__ico {
-  box-shadow: var(--shadow-sm);
-  border: 1px solid rgba(255,255,255,0.1);
+  box-shadow:1px 1px 2px  color-mix(in srgb, var(--fill-primary) 30%,rgba(0,0,0,0.3) );
+  border: 4px solid rgba(255,255,255,0.1);
+}
+.snap:hover .snap__ico{
+  background: linear-gradient(.35turn, #fff4, #fff5);
+  transition: background-color .14s, backdrop-filter .14s, -webkit-backdrop-filter .14s;
 }
 /* 文字极轻跟随（一层就够，别分层） */
 .snap:not(.snap--add) .snap__txt {

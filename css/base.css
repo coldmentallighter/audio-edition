@@ -37,7 +37,7 @@ html[data-vt-dir="sweep"]::view-transition-new(root) {
     );
   }
 }
-/* 基础：关掉默认交叉淡入，伪元素都不动 */
+
 ::view-transition-old(root),
 ::view-transition-new(root) {
   animation: none;

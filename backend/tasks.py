@@ -51,7 +51,8 @@ _FLAC_SAMPLE_FMT = {"16": "s16", "24": "s32", "32": "s32"}   # 32f 不支持
 # 无损格式没有"码率"这个可调项，给了 -b:a 只会让 ffmpeg 报
 # "Codec flac does not support bitrate" 或产出意外结果
 LOSSLESS_FORMATS = {"flac", "wav", "aiff"}
-
+COVER_UNSUPPORTED = {"wav", "aac", "aiff"}
+COVER_CAPABLE = {"m4a", "mp3", "mp4", "mov"}
 # ---------------------------------------------------------------- 波形图
 
 WAVE_MIN_W, WAVE_MAX_W = 200, 8000
@@ -190,13 +191,19 @@ def h_convert(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
             return False, {}, f"声道数不在白名单: {ch}"
         args += ["-ac", str(ch)]
 
-    # 保留元数据 + 封面（需求 §4.2 / P1）
+    # 保留元数据（需求 §4.2 / P1）
     if task.params.get("keepTags", True):
         args += ["-map_metadata", "0"]
-    if task.params.get("keepCover", True):
-        # 仅当容器支持时映射视频流；用 -map 0 会连封面一起带走
-        args += ["-map", "0"]
+
+    want_cover = task.params.get("keepCover", True)
+    if want_cover and target in COVER_CAPABLE:
+        args += ["-map", "0", "-c:v", "mjpeg"]
+        if target in ("m4a", "mp4", "mov"):
+            args += ["-disposition:v", "attached_pic"]
+        elif target == "mp3":
+            args += ["-id3v2_version", "3", "-disposition:v", "attached_pic"]
     else:
+        # wav / aiff / aac 以及用户主动取消封面时，只映射音频
         args += ["-map", "0:a"]
 
     out = _out_path(src, f".{target}")
@@ -324,10 +331,15 @@ def h_normalize(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     af += ":linear=true"
 
     out = _out_path(src, f".norm{src.suffix}")
-    r2 = runner.run([
+    norm_args = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
-        "-af", af, "-map", "0", str(out),
-    ], timeout=config.TASK_TIMEOUT)
+        "-af", af, "-map", "0:a",                    # 归一化只处理音频
+    ]
+    if src.suffix.lower() in (".m4a", ".mp4", ".mov", ".mp3"):
+        # 源里可能带封面，照旧带着走，但要显式给封面编码器
+        norm_args += ["-map", "0:v?", "-c:v", "mjpeg", "-disposition:v", "attached_pic"]
+    norm_args.append(str(out))
+    r2 = runner.run(norm_args, timeout=config.TASK_TIMEOUT)
     if not r2.ok:
         out.unlink(missing_ok=True)
         return False, {}, r2.stderr_summary

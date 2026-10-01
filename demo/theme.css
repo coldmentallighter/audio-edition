@@ -1,0 +1,236 @@
+/* ============================================================================
+   AudioEdition 主题令牌  ——  由 配色方案.md 三套类型派生（空气感亮度标尺）
+   浅色 = 源色板原值 + 派生层级；深色 = 同色相暗色变体
+   全部配对经 WCAG 对比度实测，见 配色方案-落地规格.md
+   用法：浅色 <html data-theme="t1">
+         深色 <html data-theme="t1" data-mode="dark">
+
+   文字配对契约（务必遵守，深色模式下极易搞错）：
+     --bg-*   配 --ink
+     --tint-* 配 --ink        （软状态色，已求解为可读且可见）
+     --fill-* 配 --on-fill    （强色块）
+   ============================================================================ */
+
+/* ---------- 与主题无关的常量 ---------- */
+:root {
+  --font-sans:     "SourceHanSansCN", "Noto Sans SC", system-ui, sans-serif;
+  --fs-body:       15px;
+  --fs-micro:      10px;
+  --radius-workspace: 32px;
+  --radius-card:      20px;
+  --radius-cover:     15px;
+  --radius-inner:     10px;
+  --gap-card:      23px;
+  --gap-col:       29px;
+  --header-h:      104px;
+  --sidebar-w:     234px;
+  --drawer-h:      100px;
+  --drawer-handle: 12px;
+  --z-drawer:      40;
+  --z-notice:      60;
+  /* 遮罩强度台阶。**必须偏"平"**：原来的 90/45/0 是为实心光晕调的，
+     用在网点上会让远处那一圈直接淡到看不见 —— 那就只剩"近大"、没有"远小"了。
+     现在各层在自己的 reach 内基本不透明，只在最外 38% 上淡出（避免出现硬边圈）。 */
+  --spot-a1: 100%;
+  --spot-a2: 75%;
+  --spot-a3: 0%;
+  --spot-mix-base: var(--fill-primary);
+  --spot-mix-base-sn: var(--tint-primary);
+  /* 卡片 hover 的彩色半调（AM 网点：**近处点大、远处点小**）。
+     四层同心网点共用一个格网原点，每层一个点径 + 自己的径向遮罩，
+     由外到内点径递增、遮罩 reach 递减 —— 越靠近光标，叠上来的点越大。
+     最外层（reach 最大）用第二色，所以远处是细的副 ink、近处被放大的主 ink 盖住。
+     --spot-a1/2/3 是每层共享的**强度台阶**，位置仍在光标处。 */
+  --spot-cell:    10px;                   /* 网点格距 */
+  --spot-dot-1:   18%;                    /* 最外层点径（占 closest-side 半径的比例） */
+  --spot-dot-2:   30%;
+  --spot-dot-3:   50%;
+  --spot-dot-4:   60%;                    /* 最里层点径 */
+  --spot-reach-1: 85%;                    /* 最外层的遮罩半径，逐层收窄 */
+  --spot-reach-2: 60%;
+  --spot-reach-3: 40%;
+  --spot-reach-4: 20%;
+  --spot-alt-a:   85%;                    /* 副 ink 强度，调 0 就只剩主 ink */
+  --spot-mix-alt: var(--fill-accent);     /* 副 ink 取第二色 */
+}
+
+/* ================= 类型1 蓝/橙  ·  浅色（空气感） ================= */
+:root[data-theme="t1"] {
+  /* 墨色 —— --bg-* 与 --tint-* 上的正文色；本套色板为浅色底，白字不可用 */
+  --ink:            #24445E;
+  --ink-accent:     #24445E;
+  --ink-error:      #24445E;
+  --text-muted:     rgb(36 68 94 / 0.62);
+  --text-disabled:  rgb(75 87 99 / 0.38);
+  /* 背景三层：白面 / 极浅页底 / 中性内嵌槽（配 --ink） */
+  --bg-app:         #F4F6F9;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-alt: #D4D8DB;
+  /* 强色块（配 --on-fill） */
+  --fill-primary:   #BDDBF8;
+  --fill-accent:    #F8DABD;
+  --on-fill:        #24445E;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #E1E9F1;
+  --tint-accent:    #F0E7DF;
+  --error-tint:     #f1e1e1;
+  --error-solid:    #aa4141;   /* 白字可用 */
+  /* 描边与投影 —— 空气感下层级主要靠它表达，shadow 不做大面积底色 */
+  --border:         rgb(75 87 99 / 0.22);
+  --border-strong:  rgb(75 87 99 / 0.45);
+  --shadow-sm:      0 1px 2px rgb(75 87 99 / 0.12);
+  --shadow-md:      0 4px 12px rgb(75 87 99 / 0.18);
+  --scroll-track:   #BDDBF8;
+  --scroll-thumb:   #F4F6F9;
+}
+
+/* ================= 类型1 蓝/橙  ·  深色 ================= */
+:root[data-theme="t1"][data-mode="dark"] {
+  --ink:            #F2F6FA;
+  --ink-accent:     #EAD1B8;
+  --ink-error:      #BBE8B0;
+  --text-muted:     rgb(242 246 250 / 0.62);
+  --text-disabled:  rgb(242 246 250 / 0.34);
+  --bg-app:         #11171C;
+  --bg-surface:     #1D252D;
+  --bg-surface-alt: #2B3640;
+  /* 强色块：深色模式反转为浅底 + 近黑字（配 --on-fill） */
+  --fill-primary:   #97B8D8;
+  --fill-accent:    #DBBC9F;
+  --on-fill:        #10171C;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #2B4157;
+  --tint-accent:    #57412B;
+  --error-tint:     #502828;
+  --error-solid:    #9c3f3f;
+  --border:         rgb(242 246 250 / 0.16);
+  --border-strong:  rgb(242 246 250 / 0.34);
+  --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-md:      0 4px 14px rgb(0 0 0 / 0.55);
+  --scroll-track:   #2B3640;
+  --scroll-thumb:   #97B8D8;
+}
+
+/* ================= 类型2 绿/橙  ·  浅色（空气感） =================
+   两处改动（相对源色板）：
+     1. 绿色降饱和：S 53.1% → 34.7%，色相 118° 与亮度 0.808 保持不变。
+        同一比例套用到整套绿色族（页底/内嵌槽/软色底/滚动条），家族才不脱节。
+     2. 第二色 ↔ 错误色 对调：第二色 #FEC7FF → #FFE5B4，错误色 #FFE5B4 → #FEC7FF。
+        对调后错误色是品红，而奶油色根本不像"出错了"，这一版语义才对。
+   --tint-* 与 --error-tint 的亮度按 §3 规则重解（ink≥4.5 且 vs 页底≥1.13，取最浅）。 */
+:root[data-theme="t2"] {
+  /* 墨色 —— --bg-* 与 --tint-* 上的正文色；本套色板为浅色底，白字不可用 */
+  --ink:            #2D602D;
+  --ink-accent:     #2D602D;
+  --ink-error:      #2D602D;
+  --text-muted:     rgb(45 96 45 / 0.62);
+  --text-disabled:  rgb(72 92 71 / 0.38);
+  /* 背景三层：白面 / 极浅页底 / 中性内嵌槽（配 --ink） */
+  --bg-app:         #F5F8F5;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-alt: #D5DAD5;
+  /* 强色块（配 --on-fill） */
+  --fill-primary:   #BEDFBD;
+  --fill-accent:    #fffab4;
+  --on-fill:        #2D602D;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #DDEEDD;
+  --tint-accent:    #EFE9DD;
+  --error-tint:     #efdee4;
+  --error-solid:    #ad3565;   /* 白字可用 */
+  /* 描边与投影 —— 空气感下层级主要靠它表达，shadow 不做大面积底色 */
+  --border:         rgb(72 92 71 / 0.22);
+  --border-strong:  rgb(72 92 71 / 0.45);
+  --shadow-sm:      0 1px 2px rgb(72 92 71 / 0.12);
+  --shadow-md:      0 4px 12px rgb(72 92 71 / 0.18);
+  --scroll-track:   #BEDFBD;
+  --scroll-thumb:   #F5F8F5;
+}
+
+/* ================= 类型2 绿/橙  ·  深色 ================= */
+:root[data-theme="t2"][data-mode="dark"] {
+  --ink:            #F2F6FA;
+  --ink-accent:     #eae8b8;
+  --ink-error:      #E7B0E8;
+  --text-muted:     rgb(242 246 250 / 0.62);
+  --text-disabled:  rgb(242 246 250 / 0.34);
+  --bg-app:         #141A13;
+  --bg-surface:     #202A20;
+  --bg-surface-alt: #2F3C2F;
+  /* 强色块：深色模式反转为浅底 + 近黑字（配 --on-fill） */
+  --fill-primary:   #A4CCA3;
+  --fill-accent:    #d8d897;
+  --on-fill:        #10171C;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #344F33;
+  --tint-accent:    #57482B;
+  --error-tint:     #50283c;
+  --error-solid:    #af4365;
+  --border:         rgb(242 246 250 / 0.16);
+  --border-strong:  rgb(242 246 250 / 0.34);
+  --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-md:      0 4px 14px rgb(0 0 0 / 0.55);
+  --scroll-track:   #2F3C2F;
+  --scroll-thumb:   #A4CCA3;
+}
+
+/* ================= 类型3 紫/珊瑚  ·  浅色（空气感） =================
+   第二色 ↔ 错误色 对调：第二色 #F0FFC7 → #FFC5B4，错误色 #FFC5B4 → #F0FFC7。
+   副产物：原来那个"几乎等于白、在页底上看不见"的黄绿（vs 页底 1.03）
+   现在只当错误软底用，强调块换成珊瑚色（vs 页底 1.38），可见性问题顺手消失；
+   --fill-accent 因此不再需要 §3.5 的自适应加深，回归源色原值。 */
+:root[data-theme="t3"] {
+  /* 墨色 —— --bg-* 与 --tint-* 上的正文色；本套色板为浅色底，白字不可用 */
+  --ink:            #554F65;
+  --ink-accent:     #554F65;
+  --ink-error:      #554F65;
+  --text-muted:     rgb(85 79 101 / 0.62);
+  --text-disabled:  rgb(128 119 153 / 0.38);
+  /* 背景三层：白面 / 极浅页底 / 中性内嵌槽（配 --ink） */
+  --bg-app:         #F5F4F9;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-alt: #D6D4DB;
+  /* 强色块（配 --on-fill） */
+  --fill-primary:   #D6C7FF;
+  --fill-accent:    #FFC5B4;
+  --on-fill:        #554F65;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #E7E3F2;
+  --tint-accent:    #EAD8D3;
+  --error-tint:     #ead2de;
+  --error-solid:    #be316e;   /* 白字可用 */
+  /* 描边与投影 —— 空气感下层级主要靠它表达，shadow 不做大面积底色 */
+  --border:         rgb(128 119 153 / 0.22);
+  --border-strong:  rgb(128 119 153 / 0.45);
+  --shadow-sm:      0 1px 2px rgb(128 119 153 / 0.12);
+  --shadow-md:      0 4px 12px rgb(128 119 153 / 0.18);
+  --scroll-track:   #D6C7FF;
+  --scroll-thumb:   #F5F4F9;
+}
+
+/* ================= 类型3 紫/珊瑚  ·  深色 ================= */
+:root[data-theme="t3"][data-mode="dark"] {
+  --ink:            #F2F6FA;
+  --ink-accent:     #EAC3B8;
+  --ink-error:      #D9E8B0;
+  --text-muted:     rgb(242 246 250 / 0.62);
+  --text-disabled:  rgb(242 246 250 / 0.34);
+  --bg-app:         #14111C;
+  --bg-surface:     #211D2D;
+  --bg-surface-alt: #312B40;
+  /* 强色块：深色模式反转为浅底 + 近黑字（配 --on-fill） */
+  --fill-primary:   #A897D8;
+  --fill-accent:    #D8A697;
+  --on-fill:        #10171C;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #372B57;
+  --tint-accent:    #57352B;
+  --error-tint:     #502839;
+  --error-solid:    #762d4f;
+  --border:         rgb(242 246 250 / 0.16);
+  --border-strong:  rgb(242 246 250 / 0.34);
+  --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-md:      0 4px 14px rgb(0 0 0 / 0.55);
+  --scroll-track:   #312B40;
+  --scroll-thumb:   #A897D8;
+}

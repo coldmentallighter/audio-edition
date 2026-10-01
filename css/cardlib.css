@@ -100,7 +100,7 @@
   #cardSections .fcard > .fcard__dots {
     --spot-reach: var(--spot-reach-1);
     background-image: radial-gradient(circle closest-side,
-      color-mix(in srgb, var(--spot-mix-alt) var(--spot-alt-a), transparent) 0 var(--spot-dot-1),
+      color-mix(in srgb, var(--spot-mix-base) var(--spot-alt-a), transparent) 0 var(--spot-dot-1),
       transparent calc(var(--spot-dot-1) + 1%));
   }
   #cardSections .fcard > .fcard__dots::before {
@@ -155,25 +155,23 @@
 }
 #cardSections .fcard:not(.fcard--new):hover {
   box-shadow:
-    0 8px 24px rgb(75 87 99 / 0.20),
-    0 2px 6px  rgb(75 87 99 / 0.12);
+    /*0 0px 24px color-mix(in srgb, var(--fill-primary) 25%, transparent ),*/
+    0 2px 6px  color-mix(in srgb, var(--on-fill) 25%, rgba(0, 0, 0, 0.2) );
   z-index: 56;
 }
 
-/* 3. 内部元素视差（和整卡 transform 叠加，translate 属性和 transform 不冲突） */
+/* 3. 内部元素视差 */
 #cardSections .fcard:hover .fcard__ico{
-  /* 关键：保留原色，但让它半透明，毛玻璃才透得出来 */
-  /* 70% 原色 + 30% 白色(带 80% alpha) */
-  background-color: #fff6;
-
-  /* 毛玻璃 */
+  background: linear-gradient(.35turn, #fff4, #fff5);
+  box-shadow:0px 0px 4px  color-mix(in srgb, var(--fill-primary) 50%,transparent );
+  border: 1px solid rgba(255,255,255,0.3);
   backdrop-filter: blur(2px) saturate(1.2);
   -webkit-backdrop-filter: blur(2px) saturate(1.2);
   transition: background-color .14s, backdrop-filter .14s, -webkit-backdrop-filter .14s;
 }
 #cardSections .fcard:not(.fcard--new) .fcard__ico {
   --kx:   0.5;      /* 右移 X 衰减 */
-  --kyRaw:0.4;      /* ← Y 原始量衰减，主调这个（下移过多就压小） */
+  --kyRaw:0.4;      /* Y 原始量衰减，主调这个（下移过多就压小） */
   --kz:   0.5;      /* 正 z 衰减 */
   --kry:  0.6;      /* rotateY 正值衰减 */
   --krx:  0.6;      /* rotateX 正值衰减（下移造成的俯冲） */
@@ -217,10 +215,7 @@
   will-change: transform;
 }
 
-#cardSections .fcard:hover .fcard__ico {
-  box-shadow: var(--shadow-md);
-  border: 1px solid rgba(255,255,255,0.3);
-}
+
 #cardSections .fcard:not(.fcard--new):hover .fcard__desc {
   -webkit-text-stroke: 3px var(--tint-primary);
   paint-order: stroke fill;

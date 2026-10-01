@@ -35,7 +35,6 @@
   --spot-a2: 75%;
   --spot-a3: 0%;
   --spot-mix-base: var(--fill-primary);
-  --spot-mix-base-sn: var(--tint-primary);
   /* 卡片 hover 的彩色半调（AM 网点：**近处点大、远处点小**）。
      四层同心网点共用一个格网原点，每层一个点径 + 自己的径向遮罩，
      由外到内点径递增、遮罩 reach 递减 —— 越靠近光标，叠上来的点越大。
@@ -68,11 +67,11 @@
   --bg-surface-alt: #D4D8DB;
   /* 强色块（配 --on-fill） */
   --fill-primary:   #BDDBF8;
-  --fill-accent:    #F8DABD;
+  --fill-accent:    #f8e0bd;
   --on-fill:        #24445E;
   /* 软状态色（配 --ink） */
   --tint-primary:   #E1E9F1;
-  --tint-accent:    #F0E7DF;
+  --tint-accent:    #f0e9df;
   --error-tint:     #f1e1e1;
   --error-solid:    #aa4141;   /* 白字可用 */
   /* 描边与投影 —— 空气感下层级主要靠它表达，shadow 不做大面积底色 */

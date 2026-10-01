@@ -92,20 +92,60 @@
 /* ============================== 通知 ============================== */
 
 .notice {
-  position: fixed; right: 20px; bottom: 20px;
+  --notice-gap: 20px;
+  --notice-shift: calc(100% + var(--notice-gap));  /* 自身宽 + right 间距 */
+
+  position: fixed;
+  right: var(--notice-gap);
+  top: 100px;
   z-index: var(--z-notice);
   display: flex; align-items: center; gap: 11px;
   width: 320px; padding: 13px 15px;
 
-  background: color-mix(in srgb, var(--bg-surface) 55%, transparent);
+  background: color-mix(in srgb, var(--bg-surface) 40%, transparent);
   border: 1px solid color-mix(in srgb, var(--border-strong) 50%, transparent);
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-md);
 
-  -webkit-backdrop-filter: blur(12px) saturate(180%);
-  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(6px) saturate(140%);
+  backdrop-filter: blur(6px) saturate(140%);
+
+  /* ↓ 关闭态（默认） */
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(var(--notice-shift));
+  opacity: 0;
+  transition:
+    transform 340ms cubic-bezier(.22, 1, .36, 1),
+    opacity   200ms ease,
+    visibility 0s linear 340ms;   /* 等滑完再真正 hidden */
 }
+
+/* 关键：全局 [hidden]{display:none} 会让我们没法过渡。
+   这条把它顶成 flex，显隐完全交给上面的 visibility。
+   和 .modal[hidden]{display:grid} 是同一个手法。 */
+.notice[hidden] { display: flex !important; }
+
+/* ↓ 打开态 */
+.notice.is-open {
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
+  opacity: 1;
+  transition:
+    transform 340ms cubic-bezier(.22, 1, .36, 1),
+    opacity   200ms ease,
+    visibility 0s;                /* 打开时立即可见 */
+}
+
 .notice[data-kind="error"] { background: var(--error-tint); }
+
+@media (prefers-reduced-motion: reduce) {
+  .notice {
+    transition: opacity 1ms linear, visibility 0s linear 1ms;
+    transform: none;
+  }
+}
 .notice__icon { flex: 0 0 auto; display: grid; place-items: center; color: var(--ink); }
 .notice__icon svg { width: 20px; height: 20px; }
 .notice__text { flex: 1; display: flex; flex-direction: column; font-size: 12.5px; min-width: 0; }
@@ -143,42 +183,78 @@
   position: absolute;
   inset: 0;
   background: rgb(0 0 0 / 0);
-  -webkit-backdrop-filter: blur(0);
-  backdrop-filter: blur(0);
-  transition:
-    background-color .16s ease,
-    -webkit-backdrop-filter .16s ease,
-    backdrop-filter .16s ease;
+  transition: background-color .16s ease;   /* 不再过渡 backdrop-filter */
 }
 .modal.is-open .modal__scrim {
   background: rgb(0 0 0 / .32);
-  -webkit-backdrop-filter: blur(4px);
-  backdrop-filter: blur(4px);
+  /* 删掉 -webkit-backdrop-filter / backdrop-filter */
 }
 
-/* ---- 弹框：上浮 + 轻微放大 ---- */
+/* ---- 弹框：绕偏下的水平轴旋入 + 自下而上升起 ---- */
+
+.modal {
+  perspective: 1000px;
+  perspective-origin: center center;
+}
+
 .modal__box {
   position: relative;
   width: 480px;
   padding: 22px 24px;
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
+  background: linear-gradient(.35turn,
+    color-mix(in srgb, var(--bg-surface), transparent 27%),
+    color-mix(in srgb, var(--bg-surface), transparent 33%)
+  );
+  backdrop-filter: blur(12px) saturate(1.2);
+  -webkit-backdrop-filter: blur(12px) saturate(1.2);
+  border: 1px solid color-mix(in srgb, var(--bg-surface), #fffa 33%) ;
   border-radius: 30px;
   box-shadow: var(--shadow-md);
 
+  /* —— 三个可调参数 —— */
+  --enter-rx:  -72deg;     /* 初始旋转角：越大越"躺平"，越小越接近竖起 */
+  --enter-ty:   100px;      /* 初始下移量：越大起手越低 */
+  --enter-scale: .965;     /* 初始缩放：略小一点，落到 1 时更有"到位"感 */
+
+  /* 旋转轴的位置：50% 88% 表示水平方向居中、纵向靠近底边（离底 12%）。
+     轴越靠下，"从下掀起"的感觉越强。 */
+  transform-origin: 50% 10%;
+
   opacity: 0;
-  transform: translateY(18px) scale(.94);
+
+  /* translate / scale 走独立属性，transform 留给旋转 ——
+     计算顺序 translate → rotate → scale → transform，互不覆盖。 */
+  translate: 0 var(--enter-ty);
+  scale: var(--enter-scale);
+  transform:
+    rotateX(calc(var(--enter-rx) + var(--ny, 0) * -1.4deg))
+    rotateY(calc(var(--nx, 0) * 1.4deg));
+
   transition:
-    opacity .14s ease,
-    transform .14s cubic-bezier(.22, 1, .36, 1);
+    opacity   .16s ease,
+    /* 三个属性给同一时长同一缓动，保证它们是"一个动作"；
+       想错开节奏就改这里的时长（见下方"调参"） */
+    translate .30s cubic-bezier(.22, 1, .36, 1),
+    scale     .30s cubic-bezier(.22, 1, .36, 1),
+    transform .30s cubic-bezier(.22, 1, .36, 1);
+
+  will-change: translate, scale, transform;
 }
+
 .modal.is-open .modal__box {
+  --enter-rx: 0deg;
+  --enter-ty: 0px;
+  --enter-scale: 1;
   opacity: 1;
-  transform: translateY(0) scale(1);
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .modal, .modal__scrim, .modal__box { transition-duration: .01ms !important; }
+  .modal__box {
+    translate: none;
+    scale: none;
+    transform: none;
+    transition: opacity .01ms;
+  }
 }
 .modal__title { margin: 0; font-size: 17px; }
 .modal__sub { margin: 3px 0 16px; font-size: 12px; color: var(--text-muted); }

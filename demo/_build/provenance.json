@@ -1,0 +1,44 @@
+{
+  "generatedAt": "2026-10-01 00:15:54",
+  "sources": {
+    "app.js": {
+      "sha256_16": "c6f51df62b8b9af6",
+      "bytes": 114533
+    },
+    "api.js": {
+      "sha256_16": "cae666a774acae7c",
+      "bytes": 24830
+    },
+    "theme.css": {
+      "sha256_16": "fbd34170138c830d",
+      "bytes": 10405
+    },
+    "css/": {
+      "base.css": "e72199768df7c446",
+      "cardlib.css": "65a99c13a00a8ba3",
+      "common.css": "e5cfafd2e23c1e41",
+      "drawer.css": "bd8fb3b384bd69ee",
+      "editor.css": "fa5e488583a769fc",
+      "filecard.css": "830b5b990a59f2ed",
+      "header.css": "d7cedca87810f447",
+      "layout.css": "5e31b3bc5db50a74",
+      "overlays.css": "df494467625ce3b7"
+    },
+    "index.html": {
+      "sha256_16": "fa5a5fba5c3c85fa",
+      "note": "注入 demo-data.js / mock.js / demo.css / 角标"
+    }
+  },
+  "cssOrder": [
+    "theme.css",
+    "css/base.css",
+    "css/common.css",
+    "css/header.css",
+    "css/layout.css",
+    "css/filecard.css",
+    "css/drawer.css",
+    "css/cardlib.css",
+    "css/overlays.css",
+    "css/editor.css"
+  ]
+}

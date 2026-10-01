@@ -30,6 +30,21 @@ cd audio-edition
 > **注意**：默认每次启动都会**清空工作区**（`uploads/`、`outputs/` 与数据库），
 > 页面首帧一定是空的。要保留上一轮就设 `AE_FRESH=0`。
 
+### 只想看界面？用 UI 演示版
+
+不想装 ffmpeg、也不想导入真实文件，只想把界面拿给人看：
+
+```powershell
+双击 demo\start_demo.bat        # 或者 python demo/serve.py
+```
+
+`demo/` 是一份**自带内置样例数据、不需要任何后端**的 UI 演示版：跑的是同一份前端
+（`app.js` / `css` 逐字节拷贝），只把后端换成了 `mock.js`。所有交互都能点
+（主题、勾选批量、队列进度与失败重试、抽屉三档拖拽、卡片编辑器、执行链、试听、
+拖拽导入、右键菜单），只是不真的转码/改标签/开资源管理器。
+
+详见 [`demo/README.md`](demo/README.md)；自检：`python demo/_build/verify_demo.py`（75 项）。
+
 ---
 
 ## 一、项目特色
@@ -422,6 +437,7 @@ audio-edition/
 │   └── send_to_ae.py         资源管理器右键导入的桥接脚本（见"从资源管理器右键导入"）
 │
 ├── tests/                    自检脚本（见下）
+├── demo/                     UI 演示版：自带样例数据、不需要后端（见「只想看界面」）
 ├── uploads/                  导入的工作副本（启动清空）
 ├── outputs/                  产物：转换结果 / 波形 PNG / ZIP（启动清空）
 ├── .cache/                   峰值与封面缓存（启动清空）
@@ -449,6 +465,9 @@ python tests/snapshot_drag_real.py  #  12 项：真实拖拽（CDP）
 python tests/halftone_check.py      #  27 项：卡片 hover 的 AM 网点（CDP 截图 + 周期/点径）
 python tests/reveal_cmd_check.py    #  30 项：「显示所在目录」拼出的命令行形式（不弹窗）
 python tests/palette_regen.py       #  改色板时用来推导新令牌
+
+# UI 演示版自检（自己起静态服务，不需要 8765，也不会碰真实文件）
+python demo/_build/verify_demo.py   #  75 项：把界面上的交互真点一遍 + 断言 mock 覆盖完整
 ```
 
 > `halftone_check.py` 是唯一**必须看渲染结果**的脚本：computed style 只能证明 CSS 写对了，

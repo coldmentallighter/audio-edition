@@ -1,0 +1,172 @@
+/* ================================ Body ================================ */
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* --------------------------- 左侧栏 --------------------------- */
+
+.sidebar {
+  flex: 0 0 var(--sidebar-w);
+  display: flex; flex-direction: column;
+  min-height: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-strong);
+}
+
+.pane { display: flex; flex-direction: column; min-height: 0; }
+.pane--queue { flex: 0 0 42%; }
+.pane--log { flex: 1; }
+
+.pane__head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.pane__title { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .3px; }
+.pane__head .badge { margin-left: auto; }
+
+.pane__body { flex: 1; overflow-y: auto; padding: 10px; min-height: 0; }
+.pane__body--log { padding: 8px 10px; font-size: 12px; }
+
+.splitter {
+  flex: 0 0 9px;
+  display: grid; place-items: center;
+  cursor: row-resize;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.splitter span { width: 26px; height: 3px; border-radius: 2px; background: var(--border-strong); }
+.splitter:hover span { background: var(--ink); }
+
+/* 任务项 */
+.task {
+  padding: 8px 10px;
+  margin-bottom: 7px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--fill-primary);
+  border-radius: var(--radius-inner);
+}
+.task:last-child { margin-bottom: 0; }
+.task--failed { background: var(--error-tint); border-left-color: var(--error-solid); }
+.task--running { border-left-color: var(--fill-accent); }
+.task__top { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.task__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task__meta { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+.task__err {
+  margin-top: 5px; padding: 5px 7px;
+  font-size: 11px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  background: var(--bg-surface); border-radius: 7px;
+  color: var(--ink); word-break: break-all;
+}
+/* 成功任务带产物时的「打开 / 下载」入口 */
+.task__out { display: flex; gap: 6px; margin-top: 7px; }
+.task__out a { text-decoration: none; white-space: nowrap; }
+
+.progress {
+  height: 6px; margin-top: 6px;
+  background: var(--bg-surface);
+  border-radius: 999px; overflow: hidden;
+}
+.progress > i {
+  display: block; height: 100%;
+  background: var(--fill-primary);
+  border-radius: 999px;
+  transition: width .3s ease;
+}
+
+/* 日志行 */
+.log { display: flex; gap: 7px; padding: 2px 0; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.log__t { color: var(--text-muted); flex: 0 0 auto; }
+.log__m { flex: 1; word-break: break-word; }
+.log--ok   .log__m { color: var(--ink); font-weight: 600; }
+.log--err  .log__m { color: var(--ink); }
+.log--err  { background: var(--error-tint); border-radius: 5px; padding: 2px 5px; }
+
+/* --------------------------- 主工作区 --------------------------- */
+
+.workspace {
+  flex: 1;
+  display: flex; flex-direction: column;
+  gap: 14px;
+  min-width: 0; min-height: 0;
+  padding: 18px 20px 0;
+}
+
+/* 常驻选择条：全选 / 反选 / 总数 */
+.selbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+}
+.selbar__label { font-size: 12.5px; }
+.selbar__spacer { flex: 1; }
+.selbar__count { font-size: 12px; color: var(--text-muted); }
+
+.bulkbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 14px;
+  background: var(--fill-primary);
+  /* 必须【显式声明】color：底是浅色 --fill-primary，
+     深色模式下若继承 --ink 会变成浅色字配浅蓝底（仅 1.9:1）。
+     --on-fill 在深色下是近黑 #10171C，达 8.75:1。 */
+  color: var(--on-fill);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
+}
+.bulkbar__acts { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+
+/* 批量栏内的按钮：整条栏是浅色 --fill-primary。
+   普通按钮若沿用默认的 --bg-surface 底（深色模式下是深色），
+   在浅色栏里既突兀、又只能靠深字才读得清；
+   改为统一取"栏内"配色：浅色 --fill-accent 底 + 深色 --on-fill 字。 */
+.bulkbar .btn--sm {
+  background: var(--fill-accent);
+  color: var(--on-fill);
+  border-color: transparent;
+}
+.bulkbar .btn--sm:hover { background: var(--tint-accent); color: var(--on-fill); }
+/* 删除按钮同样走浅底：用 --error-tint 在深色模式下会变成深绿，
+   配 --on-fill 近黑字只有 1.6:1 */
+.bulkbar .btn--sm.btn--danger { background: var(--fill-accent); color: var(--on-fill); }
+.bulkbar .btn--sm.btn--danger:hover { background: var(--error-solid); color: #fff; }
+
+.check { display: inline-flex; align-items: center; cursor: pointer; }
+.check input { position: absolute; opacity: 0; width: 0; height: 0; }
+.check span {
+  width: 17px; height: 17px;
+  display: grid; place-items: center;
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+}
+.check input:checked + span { background: var(--fill-primary); border-color: var(--border-strong); }
+.check input:checked + span::after {
+  content: ""; width: 9px; height: 5px;
+  /* 勾选标记画在 --fill-primary 上，用 --ink 而非 --on-fill
+     （深色模式下 --fill-primary 是浅蓝底，--on-fill 近黑只有 2.99:1） */
+  border-left: 2px solid var(--ink); border-bottom: 2px solid var(--ink);
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+.check input:focus-visible + span { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+
+.filelist {
+  flex: 1;
+  display: flex; flex-direction: column;
+  gap: var(--gap-card);
+  overflow-y: auto;
+  min-height: 0;
+  /* 让出停靠层的空间：收起时只露快照条(74) + 下边距，避免遮住最后一张卡片 */
+  padding-right: 4px;
+  padding-bottom: 92px;
+}
+
