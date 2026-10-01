@@ -1204,6 +1204,29 @@ function bindVolume() {
 
 /* --------------------------------------------------------- 波形绘制 */
 
+/* 波形要用的令牌，一次读齐并按 (theme, mode) 缓存。
+   原来 tok() 是在**逐柱循环内**被调用的（一根柱子一次 getComputedStyle），
+   一张 900px 宽的波形约 900–1200 次 —— 全是为了确认"颜色还是那个颜色"。
+   令牌只随 data-theme / data-mode 变，所以按这两个值做缓存键是完备的。 */
+let _waveTok = { key: null, v: null };
+function waveTokens() {
+  const key = (document.documentElement.dataset.theme || '')
+            + '|' + (document.documentElement.dataset.mode || '');
+  if (_waveTok.key === key && _waveTok.v) return _waveTok.v;
+  const v = {
+    bg:     tok('--bg-surface'),
+    border: tok('--border'),
+    muted:  tok('--text-muted') || tok('--ink'),
+    fill:   tok('--fill-primary'),
+    clip:   tok('--error-solid'),
+    cap:    tok('--on-fill', 0.45),
+    font10: '10px ' + cssVar('--font-sans'),
+    font11: '11px ' + cssVar('--font-sans'),
+  };
+  _waveTok = { key, v };
+  return v;
+}
+
 /** 波形绘制：优先用后端真实峰值；没有数据时明确画占位，不伪造波形 */
 function drawWave(canvas, id) {
   const f = FILES.find(x => x.id === id);
@@ -1211,13 +1234,17 @@ function drawWave(canvas, id) {
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = canvas.clientHeight;
   if (!w || !h) return;
-  canvas.width = w * dpr; canvas.height = h * dpr;
+  /* 只有尺寸真的变了才动 width/height：给它们赋值会清空画布并**重新分配后备缓冲**，
+     每次重绘都做一次是纯浪费（也是 GC 的一个来源）。 */
+  const bw = Math.round(w * dpr), bh = Math.round(h * dpr);
+  if (canvas.width !== bw || canvas.height !== bh) { canvas.width = bw; canvas.height = bh; }
 
   const ctx = canvas.getContext('2d');
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
 
-  ctx.fillStyle = tok('--bg-surface');
+  const T = waveTokens();
+  ctx.fillStyle = T.bg;
   ctx.fillRect(0, 0, w, h);
 
   const data = (typeof peakCache !== 'undefined') ? peakCache.get(id) : null;
@@ -1230,15 +1257,15 @@ function drawWave(canvas, id) {
     // 对一张封面图来说，那个建议是错的。
     for (let lane = 0; lane < 2; lane++) {
       const cy = lane * laneH + laneH / 2;
-      ctx.fillStyle = tok('--border');
+      ctx.fillStyle = T.border;
       ctx.fillRect(0, cy, w, 1);
     }
     const notAudio = f.kind && f.kind !== 'audio';
     const msg = notAudio
       ? `${f.kind === 'image' ? '图片' : '非音频文件'} · 没有波形`
       : '暂无峰值数据 · 右键卡片可「重建峰值图」';
-    ctx.fillStyle = tok('--text-muted') || tok('--ink');
-    ctx.font = '11px ' + cssVar('--font-sans');
+    ctx.fillStyle = T.muted;
+    ctx.font = T.font11;
     ctx.textAlign = 'center';
     ctx.fillText(msg, w / 2, h / 2 + 4);
     ctx.textAlign = 'left';
@@ -1264,20 +1291,20 @@ function drawWave(canvas, id) {
       const amp = Math.max(0.6, amp01 * maxAmp);
       const x = i * step;
       const isClip = amp01 >= clip;
-      ctx.fillStyle = isClip ? tok('--error-solid') : tok('--fill-primary');
+      ctx.fillStyle = isClip ? T.clip : T.fill;
       ctx.fillRect(x, cy - amp, barW, amp * 2);
       if (!isClip) {
-        ctx.fillStyle = tok('--on-fill', 0.45);
+        ctx.fillStyle = T.cap;
         ctx.fillRect(x, cy - amp, barW, 1);
         ctx.fillRect(x, cy + amp - 1, barW, 1);
       }
     }
-    ctx.fillStyle = tok('--border');
+    ctx.fillStyle = T.border;
     ctx.fillRect(0, cy, w, 1);
   }
 
-  ctx.fillStyle = tok('--text-muted') || tok('--ink');
-  ctx.font = '10px ' + cssVar('--font-sans');
+  ctx.fillStyle = T.muted;
+  ctx.font = T.font10;
   ctx.fillText('L', 6, laneH / 2 - 3);
   ctx.fillText('R', 6, laneH + laneH / 2 - 3);
 }
@@ -1783,17 +1810,31 @@ let metaCloseTimer = null;
 /** 打开元数据编辑：有后端时拉真实标签，否则退回本地 mock */
 const _modalTimers = new WeakMap();
 
+/* 旋入动画播完后给模态加 .is-settled —— .modal__box 的毛玻璃从那一刻才开
+   （见 css/overlays.css：盒子在动的时候它的模糊采样区一直在动，每帧都要重新模糊）。
+   两个模态的开启路径**不是同一个函数**（#cardModal 走 openModal，
+   #metaModal 走 openMeta），所以抽成一个公共函数 —— 否则只改一处，
+   另一个模态会永远没有毛玻璃。 */
+function settleModal(el, delay = 320) {
+  clearTimeout(_modalTimers.get(el));
+  _modalTimers.set(el, setTimeout(() => {
+    el.classList.add('is-settled');
+    _modalTimers.delete(el);
+  }, delay));
+}
+
 function openModal(el) {
   clearTimeout(_modalTimers.get(el));
   _modalTimers.delete(el);
-  el.classList.remove('is-open');
+  el.classList.remove('is-open', 'is-settled');
   el.hidden = false;
   void el.offsetWidth;                              // 强制回流，让 transition 有起点
   requestAnimationFrame(() => el.classList.add('is-open'));
+  settleModal(el);                                  // 时长比 CSS 的 .30s 略长，避免和过渡打架
 }
 
 function closeModal(el) {
-  el.classList.remove('is-open');
+  el.classList.remove('is-open', 'is-settled');
   clearTimeout(_modalTimers.get(el));               // 防抖：关-开-关 连点时不会误隐藏
   _modalTimers.set(el, setTimeout(() => {
     el.hidden = true;
@@ -1836,14 +1877,17 @@ async function openMeta(id) {
      </div>`).join('');
   const modal = $('#metaModal');
   clearTimeout(metaCloseTimer);                // 取消未播完的关闭
-  modal.classList.remove('is-open');           // 先回到关闭态，作为过渡起点
+  modal.classList.remove('is-open', 'is-settled');   // 先回到关闭态，作为过渡起点
   modal.hidden = false;                        // 恢复 display（去 [hidden]{display:none} 的影响）
   void modal.offsetWidth;                      // 强制回流，让起点样式被浏览器确认
   requestAnimationFrame(() => modal.classList.add('is-open'));
+  settleModal(modal);                          // 走的是 metaCloseTimer 以外的计时器，互不干扰
 }
 function closeMeta() {
   const modal = $('#metaModal');
-  modal.classList.remove('is-open');           // 触发淡出 + 模糊收起
+  modal.classList.remove('is-open', 'is-settled');   // 触发淡出 + 模糊收起
+  clearTimeout(_modalTimers.get(modal));       // 别让排队的 .is-settled 在关闭后才加上
+  _modalTimers.delete(modal);
   clearTimeout(metaCloseTimer);
   metaCloseTimer = setTimeout(() => {          // 等过渡播完再设置 hidden（纯语义）
     modal.hidden = true;
@@ -1881,12 +1925,35 @@ function bind() {
 
   // dir: 'expand'（变亮）| 'contract'（变暗）
   function switchTheme(dir, mutate) {
+    const root = document.documentElement;
+    /* 主题切换 = 全树令牌变化。此刻必须掐掉【各组件自己】的颜色/阴影过渡，
+       否则每个带 transition 的元素都会起一段动画：实测数百个 Animation
+       覆盖 background-color / border-color / box-shadow / scrollbar-color，
+       每个都在重绘 → 连续掉帧（见 渲染开销优化方案.md §2.1）。
+
+       只动 transition，**绝不动 animation**：
+       平扫 vt-sweep 与径向 vt-expand / vt-contract 都是 animation
+       （css/base.css 的 @keyframes），且作用在 ::view-transition-* 伪元素上
+       —— 那是独立的伪元素树，`*` 后代选择器命中不到，所以它们照常播。
+       别把 css 里那条规则扩展成 `animation: none`，也别把平扫/径向
+       从 animation 改写成 transition(clip-path)，那样会被它一起掐掉。 */
+    root.setAttribute('data-theme-switch', '');
+    /* 两个 rAF：第一个 rAF 里新主题的样式才被采用，第二个才确保这一帧已经画完 */
+    const clearSwitchFlag = () => requestAnimationFrame(() => requestAnimationFrame(
+      () => root.removeAttribute('data-theme-switch')));
+
     if (!document.startViewTransition || reduce) {
-      mutate();
-      requestAnimationFrame(redrawAllWaves);
+      /* try/finally：这个标记是全局生效的（它会掐掉所有组件过渡），
+         万一 mutate() 抛了（localStorage 在隐私模式/配额满时会抛），
+         也必须把它摘掉，否则整个页面的过渡会**永久**失效。 */
+      try {
+        mutate();
+      } finally {
+        requestAnimationFrame(redrawAllWaves);
+        clearSwitchFlag();
+      }
       return;
     }
-    const root = document.documentElement;
     root.dataset.vtDir = dir;
     root.style.setProperty('--vt-r', Math.hypot(innerWidth, innerHeight) + 'px');
     // 15° 斜线在整幅高度上的水平偏移量
@@ -1895,6 +1962,7 @@ function bind() {
     const t = document.startViewTransition(mutate);
     t.finished.finally(() => {
       delete root.dataset.vtDir;
+      clearSwitchFlag();
       requestAnimationFrame(redrawAllWaves);
     });
   }
@@ -2440,9 +2508,43 @@ function bind() {
 
 /* ------------------------------------------------- 后端数据接入（api.js 调用） */
 
+/** 上一次渲染用的数据指纹（见下）。null = 还没渲染过 */
+let _filesSig = null;
+
 /** 用后端文件列表替换本地 mock，并重绘卡片 */
 window.applyServerFiles = function (files) {
   const list = Array.isArray(files) ? files : [];
+
+  /* 数据指纹：只取"会体现在界面上的字段"。
+     api.js 的 syncAndProbe 每 2s 就来一次 reloadFiles，绝大多数时候什么都没变，
+     原来却照旧重建整个列表 + 重画全部波形（trace 实测：RunMicrotasks 2.5ms +
+     ParseHTML 0.3ms + Layout 0.4ms，每 2 秒一次；每个文件的 <canvas> 都被销毁重建）。
+     指纹相同 → 一个 DOM 节点都不动。
+
+     ⚠ progress 必须进指纹（否则处理中的进度条不刷新），用 Math.round 压到 1% 粒度；
+       _peaks 也要进（峰值图生成好之后要能触发一次真实重绘）。
+     ⚠ COVER_V 也要进：**替换一张已有封面**时 hasCover 是 1→1 不变的，
+       而 waitForCover() 会先 bump COVER_V 再 renderFiles()，那一次 <img> 的
+       ?v= 可能仍指向服务端上的旧图。把版本号放进指纹，后续轮询才会重绘、
+       重新发起请求把新图取回来（原来靠"每 2s 无脑重绘"兜住，现在必须显式带上）。
+     ⚠ 这个分支**不允许**改任何 DOM：布局规格.md §15 要求的 checked / is-playing
+       还原逻辑在下面那条路径里，不会重绘就谈不上被抹掉。 */
+  const sig = list.map((f) => {
+    const info = f.info || {};
+    const tg = info.tags || {};
+    return [f.id, f.state, Math.round(((f.tasks || {}).progress) || 0),
+            info.hasCover ? 1 : 0, COVER_V[f.id] || 0,
+            tg.title || '', tg.artist || '', tg.album || '', tg.tracknumber || '',
+            info.format || '', info.duration || 0, f._peaks || ''].join('\u0001');
+  }).join('\u0002');
+
+  if (sig === _filesSig && list.length === FILES.length) {
+    // 勾选数等仍可能因用户操作而变，这一项开销极小，保留
+    syncBulkbar();
+    return;
+  }
+  _filesSig = sig;
+
   // 刷新不能吃掉勾选。api.js 的 syncAndProbe 每 2s 就 reloadFiles 一次，
   // 而这里原来是硬写 checked:false —— 实测勾选**活不过 2 秒**
   // （点一下 → 批量栏出现 → 2s 后批量栏自己消失），
@@ -2615,6 +2717,7 @@ window.applyOffline = function () {
   FILES.length = 0;
   TASKS.length = 0;
   LOGS.length = 0;
+  _filesSig = null;                // 断线：指纹作废，重连后必须整表重绘一次
   // 卡片与快照也要清：它们同样是"从后端来的数据"。
   // 断网时留着本地副本 = 显示一排点下去执行不了的卡片，那就是假数据。
   CARDS.length = 0;
@@ -2656,15 +2759,38 @@ function bindFollow(container, itemSelector) {
      这就是为什么这件事不能放在 CSS 里一刀切（见 header.css 的说明）。 */
   const fxOff = () => document.documentElement.dataset.fx === 'off';
 
-  container.addEventListener('pointermove', (e) => {
-    const el = e.target.closest(itemSelector);
-    if (!el || !container.contains(el)) return;
+  /* 鼠标 1000Hz 时一帧内会来好几个 pointermove。原来每个都写 4 个变量，
+     而 --mx/--my 驱动的是 mask-image / background-image（**绘制属性**，见
+     css/cardlib.css 的网点四层）—— 等于一帧内让同一张卡重绘好几次，
+     每次都要重新栅格化 4 层网点再把位图传给合成器（trace 实测：
+     Paint 100–400us + Layerize 30–230us + Commit 30–270us，每次移动都来一遍）。
+     合并到每帧一次即可：多出来的中间态本来就看不见。 */
+  const MIN_MOVE = 3;             // px：网点是软边径向遮罩，3px 以内的位移看不出来
+  let rafId = 0;
+  let pend = null;
+  const lastXY = new WeakMap();   // el → {x, y}，用来判断"动够了没有"
+
+  function flushFollow() {
+    rafId = 0;
+    const p = pend;
+    pend = null;
+    if (!p) return;
+    const el = p.el;
+    if (!el.isConnected) return;
 
     const r = el.getBoundingClientRect();
     const w = r.width || 1;
     const h = r.height || 1;
-    const x = e.clientX - r.left;
-    const y = e.clientY - r.top;
+    const x = p.cx - r.left;
+    const y = p.cy - r.top;
+
+    /* 还开着 3D 时才允许"动得不够就跳过"。
+       关掉 3D 时必须每帧照写 0（而不是跳过不写）—— 见函数开头那段说明：
+       跳过会让按下开关那一刻的残留旧值一直生效。 */
+    const prev = lastXY.get(el);
+    if (!fxOff() && prev
+        && Math.abs(prev.x - x) < MIN_MOVE && Math.abs(prev.y - y) < MIN_MOVE) return;
+    lastXY.set(el, { x, y });
 
     el.style.setProperty('--mx', x + 'px');
     el.style.setProperty('--my', y + 'px');
@@ -2675,6 +2801,13 @@ function bindFollow(container, itemSelector) {
       el.style.setProperty('--nx', ((x / w) * 2 - 1).toFixed(3));
       el.style.setProperty('--ny', ((y / h) * 2 - 1).toFixed(3));
     }
+  }
+
+  container.addEventListener('pointermove', (e) => {
+    const el = e.target.closest(itemSelector);
+    if (!el || !container.contains(el)) return;
+    pend = { el, cx: e.clientX, cy: e.clientY };
+    if (!rafId) rafId = requestAnimationFrame(flushFollow);
   });
 
   container.addEventListener('pointerout', (e) => {
@@ -2682,6 +2815,9 @@ function bindFollow(container, itemSelector) {
     if (!el || !container.contains(el)) return;
     const to = e.relatedTarget;
     if (to && el.contains(to)) return;
+    // 已排队的补写要丢掉，否则会把变量写回一个指针已经离开的元素
+    if (pend && pend.el === el) pend = null;
+    lastXY.delete(el);
     ['--mx', '--my', '--nx', '--ny'].forEach(p => el.style.removeProperty(p));
   });
 }

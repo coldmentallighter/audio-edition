@@ -72,6 +72,72 @@
   background: var(--fill-primary); color: var(--on-fill); border-color: transparent;
 }
 
+/* ------------------------------------------ 图标按钮的 3D 手感（仅 3D 开着时）
+   与卡片上的 .fcard__ico 用同一套：同样的玻璃样式 + 同样的倾斜系数，
+   另外 hover 时**先向上浮起**一点。
+
+   倾斜角不用另算：--nx/--ny 是 bindFollow() 写在 .modal__box 上的
+   （app.js: bindFollow($('#cardModal'), '.modal__box')），自定义属性会继承下来 ——
+   所以"模态盒子里指针怎么动，这些图标就跟着怎么倾"，**不需要任何新 JS**。
+
+   3D 关掉时整段不生效，退回上面那条朴素的 hover（var(--tint-primary)）。 */
+html:not([data-fx="off"]) .iconpick__btn {
+  position: relative;
+  /* 与 cardlib.css 的 .fcard__ico 同一套系数。
+     （cardlib 里那个 --krx 其实是死变量 —— rotateX 的倍率被硬编码成 1，
+      因为 --nyE 已经先被 --kyRaw 衰减过了；这里不抄它。） */
+  --kx: 0.5; --kyRaw: 0.4; --kz: 0.5; --kry: 0.6;
+  --nyE: calc(var(--ny, 0) * var(--kyRaw));
+  --px: calc(var(--nx, 0) * 8px);
+  --py: calc(var(--nyE) * 8px);
+  --pz: calc((var(--nx, 0) + var(--nyE)) * 8px);
+  --rx: calc(var(--nyE) * -11deg);
+  --ry: calc(var(--nx, 0) * 11deg);
+  --lift: 0px;                       /* hover 时抬起来的那一下 */
+  transform-origin: center center;
+  transform:
+    perspective(400px)
+    translate3d(
+      calc(min(0px, var(--px)) + max(0px, var(--px)) * var(--kx)),
+      calc(min(0px, var(--py)) + max(0px, var(--py)) + var(--lift)),
+      calc(min(0px, var(--pz)) + max(0px, var(--pz)) * var(--kz))
+    )
+    rotateX(calc(min(0deg, var(--rx)) + max(0deg, var(--rx))))
+    rotateY(calc(min(0deg, var(--ry)) + max(0deg, var(--ry)) * var(--kry)));
+  transition: transform .16s cubic-bezier(.22, 1, .36, 1),
+              background .14s, border-color .14s, box-shadow .14s;
+}
+/* 浮起 + 倾斜都会让按钮整体挪位。指针若正停在按钮下沿，按钮一挪就脱离 hover，
+   于是 hover→脱离→hover 抖成一团（卡片那边不会：它的 hover 目标是整张卡，够大）。
+   这里把命中区往下、左右各撑开一点抵消：只撑 6px —— .iconpick 的行/列间距就是 6px，
+   正好不吃到相邻按钮。伪元素全透明，只负责接指针。 */
+html:not([data-fx="off"]) .iconpick__btn::after {
+  content: "";
+  position: absolute;
+  inset: 0 -2px -6px -2px;
+}
+html:not([data-fx="off"]) .iconpick__btn:hover {
+  --lift: -3px;                      /* 先向上略微浮起；想更明显就调这个 */
+  background: linear-gradient(.35turn, #fff4, #fff5);
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--fill-primary) 50%, transparent);
+  backdrop-filter: blur(2px) saturate(1.2);
+  -webkit-backdrop-filter: blur(2px) saturate(1.2);
+}
+/* 选中态在 hover 时也必须还看得出是选中的：底色留着，玻璃叠在它上面。
+   （卡片那边没有"选中"这个概念，所以这一条是本页面特有的。） */
+html:not([data-fx="off"]) .iconpick__btn[aria-checked="true"]:hover {
+  background: linear-gradient(.35turn, #fff4, #fff5), var(--fill-primary);
+  color: var(--on-fill);
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-fx="off"]) .iconpick__btn,
+  html:not([data-fx="off"]) .iconpick__btn:hover {
+    transform: none;                 /* 不倾、不浮；玻璃与配色照旧 */
+    transition: background .14s, border-color .14s;
+  }
+}
+
 .cmdpreview {
   margin: 0; padding: 11px 12px;
   font-size: 11.5px; line-height: 1.6;

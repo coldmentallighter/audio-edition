@@ -113,10 +113,59 @@ button, input, select { font: inherit; color: inherit; }
   border-radius: 6px;
 }
 
-/* 滚动条 */
-* { scrollbar-color: var(--scroll-thumb) var(--scroll-track); scrollbar-width: thin; }
-*::-webkit-scrollbar { width: 14px; height: 14px; }
-*::-webkit-scrollbar-track { background: var(--scroll-track); border-radius: 10px; }
-*::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 7px; border: 3px solid var(--scroll-track); }
-*::-webkit-scrollbar-thumb:hover { background: var(--ink); }
+/* 滚动条。
+   scrollbar-color 是【继承】属性：写在 `*` 上等于给 1401 个元素各加一条声明，
+   每次全树样式重算都要多匹配一条规则、多算一个属性（主题切换时这一项被放大）。
+   写在根上，继承下去即可。
+   ⚠ scrollbar-width 是【不继承】的 —— 写在 html 上只作用于 html 自己，
+     所以它必须逐个列在真正会滚动的容器上。全仓会滚的只有下面这 4 个：
+       .pane__body（队列+日志）· .filelist · .cardedit（卡片编辑器）· .drawer__cards
+     （.chainbar .chain 是第 5 个，但它故意隐藏滚动条，见 header.css，别加进来） */
+html { scrollbar-color: var(--scroll-thumb) var(--scroll-track); }
+
+.pane__body,
+.filelist,
+.cardedit,
+.drawer__cards { scrollbar-width: thin; }
+
+.pane__body::-webkit-scrollbar,
+.filelist::-webkit-scrollbar,
+.cardedit::-webkit-scrollbar,
+.drawer__cards::-webkit-scrollbar { width: 14px; height: 14px; }
+.pane__body::-webkit-scrollbar-track,
+.filelist::-webkit-scrollbar-track,
+.cardedit::-webkit-scrollbar-track,
+.drawer__cards::-webkit-scrollbar-track { background: var(--scroll-track); border-radius: 10px; }
+.pane__body::-webkit-scrollbar-thumb,
+.filelist::-webkit-scrollbar-thumb,
+.cardedit::-webkit-scrollbar-thumb,
+.drawer__cards::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 7px; border: 3px solid var(--scroll-track); }
+.pane__body::-webkit-scrollbar-thumb:hover,
+.filelist::-webkit-scrollbar-thumb:hover,
+.cardedit::-webkit-scrollbar-thumb:hover,
+.drawer__cards::-webkit-scrollbar-thumb:hover { background: var(--ink); }
+
+/* ---------------------------------------------------- 主题切换期间静音组件过渡
+   主题切换 = 全树令牌变化，凡是声明了 transition 的元素都会为这个变化起一段动画
+   （实测数百个 Animation 覆盖 background-color / border-*-color / box-shadow /
+   scrollbar-color），每个都在重绘 → 连续掉帧。扫掠/径向动画已经由 view-transition
+   负责，组件自己这一段纯属副作用。标记由 app.js 的 switchTheme() 加/摘。
+
+   下面两条边界必须同时成立，缺任何一个都会把平扫/径向打掉：
+     1. 只写 transition，**不要写 animation**。
+        平扫 vt-sweep 与径向 vt-expand / vt-contract 都是 animation
+        （见本文件上面的 @keyframes），不是 transition —— 天然碰不到。
+     2. 选择器只命中**元素树**。`*` 匹配不到 ::view-transition-old(root) /
+        ::view-transition-new(root)：那是 root 的 view-transition 伪元素，
+        不在元素树里，后代选择器覆盖不到。
+
+   ⚠ 两条禁令（改这条规则前先读）：
+     · 别把它扩写成 `transition: none; animation: none` —— 那会连平扫一起停掉；
+     · 别把平扫/径向从 animation 改写成 transition(clip-path) ——
+       一旦改成 transition，就会被这条规则掐掉。它们**故意**用 animation。 */
+html[data-theme-switch] *,
+html[data-theme-switch] *::before,
+html[data-theme-switch] *::after {
+  transition: none !important;
+}
 

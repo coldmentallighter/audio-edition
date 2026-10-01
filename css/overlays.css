@@ -201,12 +201,16 @@
   position: relative;
   width: 480px;
   padding: 22px 24px;
+  /* 毛玻璃分两条路（见下面两条规则）：
+       · 3D 开着（默认）→ **常开**，旋入动画期间也带玻璃质感；
+       · 3D 关掉      → 动画期间不开，等 .is-settled 再开
+                        （盒子在动 → 模糊采样区在动 → 每帧重新模糊一次；
+                         480px 宽、DPR2 下近百万像素，trace 里就是 GPU 侧那段开销）。
+     所以底色恢复成原设计的 27%/33%；3D 关掉那一段另给一档更实的补层次感。 */
   background: linear-gradient(.35turn,
     color-mix(in srgb, var(--bg-surface), transparent 27%),
     color-mix(in srgb, var(--bg-surface), transparent 33%)
   );
-  backdrop-filter: blur(12px) saturate(1.2);
-  -webkit-backdrop-filter: blur(12px) saturate(1.2);
   border: 1px solid color-mix(in srgb, var(--bg-surface), #fffa 33%) ;
   border-radius: 30px;
   box-shadow: var(--shadow-md);
@@ -237,8 +241,6 @@
     translate .30s cubic-bezier(.22, 1, .36, 1),
     scale     .30s cubic-bezier(.22, 1, .36, 1),
     transform .30s cubic-bezier(.22, 1, .36, 1);
-
-  will-change: translate, scale, transform;
 }
 
 .modal.is-open .modal__box {
@@ -246,6 +248,35 @@
   --enter-ty: 0px;
   --enter-scale: 1;
   opacity: 1;
+  /* will-change 只在打开期间给：常驻 = 两个模态各永久占一层合成层。
+     常驻版本原来还和 backdrop-filter 叠在一起，那是显存峰值的一个来源。 */
+  will-change: translate, scale, transform;
+}
+
+/* ── 毛玻璃：3D 开着就常开 ───────────────────────────────────────────
+   作用域用 .modal:not([hidden]) 而不是无条件的 .modal__box：
+     · 打开中 / 渐隐中（hidden 还没置上）→ 开，和"常开"等效，
+       而且渐隐那 200ms 也不会像挂 .is-open 那样把玻璃"啪"地摘掉；
+     · 完全关闭后（closeModal 200ms 后置 hidden:true）→ 不算，
+       免得给一个不画出来的元素留一份模糊。 */
+html:not([data-fx="off"]) .modal:not([hidden]) .modal__box {
+  backdrop-filter: blur(6px) saturate(1.2);
+  -webkit-backdrop-filter: blur(6px) saturate(1.2);
+}
+
+/* ── 毛玻璃：3D 关掉时改成"落定后再开" ────────────────────────────────
+   动画期间盒子在动、模糊采样区跟着动，每帧都要重新模糊一次；
+   关掉 3D 的时候不要再付这份代价。动画这一段没有玻璃，
+   底色用更实的一档补回层次感（落定后回到设计值）。 */
+html[data-fx="off"] .modal:not(.is-settled) .modal__box {
+  background: linear-gradient(.35turn,
+    color-mix(in srgb, var(--bg-surface), transparent 14%),
+    color-mix(in srgb, var(--bg-surface), transparent 20%)
+  );
+}
+html[data-fx="off"] .modal.is-open.is-settled .modal__box {
+  backdrop-filter: blur(6px) saturate(1.2);
+  -webkit-backdrop-filter: blur(6px) saturate(1.2);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -258,6 +289,20 @@
 }
 .modal__title { margin: 0; font-size: 17px; }
 .modal__sub { margin: 3px 0 16px; font-size: 12px; color: var(--text-muted); }
+
+/* 标题的视差：走卡片里文字那一路（cardlib.css 的 .fcard__name 一档），
+   位移量取同样的 2px / 1px —— 这样模态里的元素和卡片里的元素是同一套景深阶梯：
+     图标 8px 且带 3D 倾斜（.iconpick__btn / .fcard__ico） ＞ 标题 2px/1px ＞ 正文 1px/0.5px
+   --nx/--ny 同样是 bindFollow() 写在 .modal__box 上、再继承下来的，
+   **不需要新 JS**。3D 关掉时整段不生效。
+   注：.modal__sub 暂未加（没要求）；要加的话照这一条换个更小的系数即可。 */
+html:not([data-fx="off"]) .modal__title {
+  translate: calc(var(--nx, 0) * 2px - 2px) calc(var(--ny, 0) * 1px - 3px);
+  transition: translate .12s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-fx="off"]) .modal__title { translate: none; }
+}
 .modal__form {
   display: grid;
   grid-template-columns: 1fr 1fr;

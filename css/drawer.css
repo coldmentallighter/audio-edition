@@ -24,7 +24,13 @@
   background: transparent;
   opacity: 0;
   pointer-events: none;
-  transition:  .34s cubic-bezier(.16,1,.3,1);
+  /* 原来是无属性名的简写（`transition: .34s cubic-bezier(...)`），
+     等价于 transition-property: all —— 连 scrollbar-color 这类根本不该动的属性
+     都会被过渡（trace 里确实看到了 scrollbar-color 的 Animation）。
+     按本文件 186 行那条注释的意图，显式列出真正要过渡的三项。 */
+  transition: background-color .16s ease,
+              opacity .16s ease,
+              backdrop-filter .16s ease;
 }
 
 /* 可点击：除 closed 外所有档（中间档也能点，但此时还没模糊） */
@@ -177,7 +183,6 @@
     background .14s,
     border-color .14s,
     box-shadow .14s;
-  will-change: transform;
 }
 .snap:hover { background: var(--fill-primary); border-color: var(--border-strong); color: var(--on-fill); }
 .snap__ico {
@@ -209,7 +214,6 @@
       calc(var(--ny, 0) * 2px)
     );
   transition: transform .14s ease-out, box-shadow .22s ease;
-  will-change: transform;
 }
 .snap:not(.snap--add):hover .snap__ico {
   box-shadow:1px 1px 2px  color-mix(in srgb, var(--fill-primary) 30%,rgba(0,0,0,0.3) );
@@ -217,7 +221,19 @@
 }
 .snap:hover .snap__ico{
   background: linear-gradient(.35turn, #fff4, #fff5);
+  /* 补上原来漏掉的模糊：这条 transition 一直都列着 backdrop-filter，
+     但从来没真的设过它（空转）。取值与 .fcard__ico 对齐，
+     这样卡片和快照的图标在 hover 时是同一档玻璃质感。 */
+  backdrop-filter: blur(2px) saturate(1.2);
+  -webkit-backdrop-filter: blur(2px) saturate(1.2);
   transition: background-color .14s, backdrop-filter .14s, -webkit-backdrop-filter .14s;
+}
+/* 同 cardlib.css：3D 关掉时不给图标叠毛玻璃。
+   上面那条现在**真的**设了 blur，所以这条不再空转 —— 它把关掉 3D 之后
+   图标 hover 的逐帧重新模糊一并去掉。 */
+html[data-fx="off"] .snap:hover .snap__ico {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
 /* 文字极轻跟随（一层就够，别分层） */
 .snap:not(.snap--add) .snap__txt {
@@ -227,6 +243,13 @@
     0
   );
   transition: transform .14s ease-out;
+}
+
+/* 快照的 will-change 同样只在 hover 期间给：常驻 = 每个快照永久占一层合成层，
+   而跟随动画只在指针停在上面时发生（同 cardlib.css 的说明）。 */
+.snap:hover,
+.snap:hover .snap__ico,
+.snap:hover .snap__txt {
   will-change: transform;
 }
 
