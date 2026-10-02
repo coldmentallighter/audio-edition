@@ -279,6 +279,25 @@ html[data-fx="off"] .modal.is-open.is-settled .modal__box {
   -webkit-backdrop-filter: blur(6px) saturate(1.2);
 }
 
+/* ── 落定之后不再过渡 transform ───────────────────────────────────────
+   旋入与淡出需要它（--enter-rx 从 -72deg 到 0）。但**落定之后**，
+   跟随效果每帧都在改 --nx/--ny → .modal__box 的 transform 每帧都在变 →
+   会把那条 .30s 的 transform 过渡**每帧重启一次**；而在一个
+   backdrop-filter + position:fixed 的盒子上跑着 transform 过渡，
+   会让它**每帧做一次 Layout**（Layout 又直接带动后面的绘制/光栅/GPU）。
+
+   实测同一段操作（30 次真实 pointermove，3D 开、模态已落定）：
+       baseline            Layout +88
+       去掉 transform 过渡  Layout +15      ← 这一条
+   保留 opacity / translate / scale：关闭时的淡出还要用；
+   closeModal 会摘掉 .is-settled，于是 transform 过渡在退出时自动恢复。
+
+   代价：指针移出模态时，那个 1.4deg 的倾斜从"缓回"变成"直接回正"。
+   倾斜量本来就小，且换掉的是每帧一次布局，值得。 */
+.modal.is-settled .modal__box {
+  transition-property: opacity, translate, scale;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .modal__box {
     translate: none;
@@ -298,6 +317,20 @@ html[data-fx="off"] .modal.is-open.is-settled .modal__box {
    注：.modal__sub 暂未加（没要求）；要加的话照这一条换个更小的系数即可。 */
 html:not([data-fx="off"]) .modal__title {
   translate: calc(var(--nx, 0) * 2px - 2px) calc(var(--ny, 0) * 1px - 3px);
+  transition: translate .12s ease-out;
+  text-shadow:1px 1px 5px  color-mix(in srgb, var(--fill-primary) 30%,#aaaa );
+}
+html:not([data-fx="off"]) .btn--primary{
+  translate: calc(var(--nx, 0) * 2px + 2px) calc(var(--ny, 0) * 1px + 3px);
+  transition: translate .12s ease-out;
+  box-shadow: -1px -1px 5px  color-mix(in srgb, var(--fill-primary) 30%,#aaaa );
+}
+html:not([data-fx="off"]) .modal__sub{
+  translate: calc(var(--nx, 0) * 1px - 1px) calc(var(--ny, 0) * .5px - 1.5px);
+  transition: translate .12s ease-out;
+}
+html:not([data-fx="off"]) .btn--ghost{
+  translate: calc(var(--nx, 0) * 1px + 1px) calc(var(--ny, 0) * .5px + 1.5px);
   transition: translate .12s ease-out;
 }
 @media (prefers-reduced-motion: reduce) {

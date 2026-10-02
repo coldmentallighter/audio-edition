@@ -1403,6 +1403,10 @@ function applyTop(top, stopName) {          // ← 去掉 grow 参数
     d.dataset.stop = stopName;
   }
   $('#drawerHandle').setAttribute('aria-expanded', String(drawerState !== 'closed'));
+  /* 抽屉一动，里面的卡片就跟着移：跟随用的矩形缓存必须作废。
+     拖拽时这里每帧都会调，但那时指针在把手上、不会触发 flushFollow，
+     所以逐帧作废是免费的（不会变成逐帧强制布局）。 */
+  invalidateFollowRects();
   return curTop;
 }
 
@@ -1820,6 +1824,10 @@ function settleModal(el, delay = 320) {
   _modalTimers.set(el, setTimeout(() => {
     el.classList.add('is-settled');
     _modalTimers.delete(el);
+    /* 旋入动画到此结束：模态盒子的位置从"动画中"变成"落定"，
+       跟随用的矩形缓存必须作废（否则倾斜会按动画中的位置算）。
+       放在这里而不是挂全局 transitionend —— 理由见 bindFollowRectHooks。 */
+    invalidateFollowRects();
   }, delay));
 }
 
@@ -2742,21 +2750,77 @@ window.applyServerHealth = function (h) {
       v.ok ? ((v.version || '').match(/\d+\.\d+(\.\d+)?/) || ['OK'])[0] : '缺失'
     }</span>`).join('');
 };
-/* 通用：让 container 内的 itemSelector 元素跟随光标写入 --mx/--my/--nx/--ny */
-function bindFollow(container, itemSelector) {
+/* ------------------------------------------------- 跟随用的元素矩形缓存
+   为什么需要：flushFollow 原来每次都 el.getBoundingClientRect()。而**上一帧刚写过
+   自定义属性**，样式树是脏的 —— 这次读取会强制浏览器同步布局。
+   trace 里那条每帧都来的 `Layout (totalObjects 2266)` 就是这么来的
+   （见 3D选项关闭状态下GPU开销问题.md 的 P4）。
+
+   缓存策略：稳态悬停时**一次都不读**。只在几何真的可能变了的时候作废重建：
+     · window resize
+     · 任何滚动（滚动不冒泡，用捕获阶段）
+     · 抽屉自己的 top/height 过渡结束（只认 .drawer 自身，见下）
+     · 模态的旋入动画结束（settleModal 里作废）
+     · 抽屉拖拽（applyTop 每帧写 --drawer-top，但那时指针在把手上，
+       不会触发 flushFollow，所以逐帧作废是免费的）
+
+   ⚠ 别在这里挂**全局** transitionend 来"兜底"：整个界面到处都有 hover 过渡
+   （.btn / .iconpick__btn / .fcard / input…），指针一动就有过渡在结束
+   → 缓存被不停作废 → 又变成每帧一次强制同步布局。
+   实测：全局 transitionend 让模态 hover 的 Layout 从 +14 涨到 +94（30 次移动）。
+   所以只认"真正改变几何"的那两个过渡：抽屉自身的 top/height。 */
+let _rectGen = 0;
+const _rectCache = new WeakMap();      // el → { gen, left, top, w, h }
+let _rectHooksBound = false;
+
+function invalidateFollowRects() { _rectGen++; }
+
+function bindFollowRectHooks() {
+  if (_rectHooksBound) return;
+  _rectHooksBound = true;
+  window.addEventListener('resize', invalidateFollowRects, { passive: true });
+  window.addEventListener('scroll', invalidateFollowRects,
+                          { passive: true, capture: true });
+  /* 只监听抽屉自身：它一动，里面的卡片整体平移。
+     e.target === drawerEl 把子元素冒泡上来的 hover 过渡挡掉（关键）。 */
+  const drawerEl = document.querySelector('.drawer');
+  if (drawerEl) {
+    drawerEl.addEventListener('transitionend', (e) => {
+      if (e.target === drawerEl
+          && (e.propertyName === 'top' || e.propertyName === 'height')) {
+        invalidateFollowRects();
+      }
+    }, { passive: true });
+  }
+}
+
+function rectOf(el) {
+  let r = _rectCache.get(el);
+  if (!r || r.gen !== _rectGen) {
+    const b = el.getBoundingClientRect();
+    r = { gen: _rectGen, left: b.left, top: b.top, w: b.width || 1, h: b.height || 1 };
+    _rectCache.set(el, r);
+  }
+  return r;
+}
+
+/* 通用：让 container 内的 itemSelector 元素跟随光标写入 --mx/--my/--nx/--ny
+   needsGlow=false 表示"这个容器里的元素不消费 --mx/--my"（两个模态就是：
+   它们只用 --nx/--ny 做倾斜，--mx/--my 全站只有 .fcard / .snap 的网点与径向光晕在用）。
+   于是 3D 关掉时，模态那条链路可以整个跳过 —— 一个字节都不写。 */
+function bindFollow(container, itemSelector, needsGlow = true) {
   if (!container || container.dataset.followBound) return;
   container.dataset.followBound = '1';
   if (!window.matchMedia('(hover: hover)').matches) return;
+  bindFollowRectHooks();
 
-  /* 3D 开关关掉时：--mx/--my 照写（径向光晕要用），
-     但 --nx/--ny 一律写 0 —— 而不是"跳过不写"。
-     跳过的话，按下开关那一刻元素上残留的旧值会一直生效，
-     直到指针下一次移动，表现为"按了按钮，卡片/模态还歪着"。
-     写 0 之后，所有消费这两个变量的 calc() 自然归零：
-       · 卡片   → perspective + rotateX/rotateY + translate3d 全成恒等
-       · 模态框 → rotateX(calc(var(--enter-rx) + 0))，旋入动画原封不动
-       · 快照   → 同上
-     这就是为什么这件事不能放在 CSS 里一刀切（见 header.css 的说明）。 */
+  /* 3D 开关关掉时：--nx/--ny 保持 0 —— 而不是"每帧写 0"。
+     残留旧值这件事由开关自己负责：fxToggle 按下时会**一次性**把所有
+     .fcard / .snap / .modal__box 的 --nx/--ny 归零（见 bind() 里那段）。
+     CSS 侧也有兜底：消费点写的是 var(--nx, 0)，变量不存在等价于 0。
+     所以这里"不写"是安全的，而"每帧写"会让模态框每帧白脏一次样式
+     （它 settle 后有 backdrop-filter，一次脏 → 整页背景重绘）。
+     仍然要写 --mx/--my 的只有卡片/快照（径向光晕）。 */
   const fxOff = () => document.documentElement.dataset.fx === 'off';
 
   /* 鼠标 1000Hz 时一帧内会来好几个 pointermove。原来每个都写 4 个变量，
@@ -2778,32 +2842,31 @@ function bindFollow(container, itemSelector) {
     const el = p.el;
     if (!el.isConnected) return;
 
-    const r = el.getBoundingClientRect();
-    const w = r.width || 1;
-    const h = r.height || 1;
+    const r = rectOf(el);                 // 稳态下命中缓存，不读布局
     const x = p.cx - r.left;
     const y = p.cy - r.top;
 
-    /* 还开着 3D 时才允许"动得不够就跳过"。
-       关掉 3D 时必须每帧照写 0（而不是跳过不写）—— 见函数开头那段说明：
-       跳过会让按下开关那一刻的残留旧值一直生效。 */
+    /* 位移不够就跳过。3D 关掉时也一样成立：那时只剩光晕，而光晕是软边径向遮罩，
+       3px 以内的位移看不出来。（原来这里因为要"每帧写 0"而绕过了阈值，
+       现在不需要写 0 了，所以阈值对所有情况都生效。） */
     const prev = lastXY.get(el);
-    if (!fxOff() && prev
-        && Math.abs(prev.x - x) < MIN_MOVE && Math.abs(prev.y - y) < MIN_MOVE) return;
+    if (prev && Math.abs(prev.x - x) < MIN_MOVE && Math.abs(prev.y - y) < MIN_MOVE) return;
     lastXY.set(el, { x, y });
 
-    el.style.setProperty('--mx', x + 'px');
-    el.style.setProperty('--my', y + 'px');
-    if (fxOff()) {
-      el.style.setProperty('--nx', '0');
-      el.style.setProperty('--ny', '0');
-    } else {
-      el.style.setProperty('--nx', ((x / w) * 2 - 1).toFixed(3));
-      el.style.setProperty('--ny', ((y / h) * 2 - 1).toFixed(3));
+    if (needsGlow) {                      // 只有 .fcard / .snap 消费 --mx/--my
+      el.style.setProperty('--mx', x + 'px');
+      el.style.setProperty('--my', y + 'px');
+    }
+    if (!fxOff()) {                       // 3D 关掉时 --nx/--ny 保持 0（不写）
+      el.style.setProperty('--nx', ((x / r.w) * 2 - 1).toFixed(3));
+      el.style.setProperty('--ny', ((y / r.h) * 2 - 1).toFixed(3));
     }
   }
 
   container.addEventListener('pointermove', (e) => {
+    /* 3D 关掉 + 这个容器不消费 --mx/--my（两个模态就是）：
+       整条链路没有任何东西要写，连 rAF 都不排。 */
+    if (fxOff() && !needsGlow) return;
     const el = e.target.closest(itemSelector);
     if (!el || !container.contains(el)) return;
     pend = { el, cx: e.clientX, cy: e.clientY };
@@ -2906,8 +2969,8 @@ function init() {
   bindSectionToggles(); 
   initCardFollow(); 
   initSnapFollow();
-  bindFollow(document.getElementById('metaModal'), '.modal__box');
-  bindFollow(document.getElementById('cardModal'), '.modal__box');
+  bindFollow(document.getElementById('metaModal'), '.modal__box', false);
+  bindFollow(document.getElementById('cardModal'), '.modal__box', false);
   syncDrawerLeft();
   applyStop('closed');
   requestAnimationFrame(redrawAllWaves);
