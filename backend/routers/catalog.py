@@ -63,6 +63,108 @@ def reset_snapshots() -> dict:
     return {"ok": True, "snapshots": cards_mod.reset_snapshots()}
 
 
+# ================================================================ 预设（§3.8.2）
+#
+# 三个端点与 snapshots 同形（GET / POST / PUT / DELETE），前端照抄接线。
+#
+# 预设是**一条链的快照**，不是"一张卡"：
+#   · `steps` 存 `{name, op, params, ico, cardId?, custom?}` —— 自包含，
+#     卡片被改名/删除都不影响它（§9.1.1 二 / §3.8.2 二）
+#   · `mode` 必须存：同一条链在串行/并行下结果完全不同（§3.8.2 二）
+#   · `icons: null` = 自动推导，数组 = 用户手选（§3.8.2 三）
+
+@router.get("/api/presets")
+def get_presets() -> dict:
+    """所有预设 + **下一条的默认名**。
+
+    默认名由后端算（`next_preset_name`）而不是前端：前端算就要把
+    "取 max+1 不复用空洞"这条规则再写一遍，而两处漂移的表现是
+    "存了两条同名的预设"（后端会因为重名拒绝，用户只会看到一个 400）。
+    """
+    items = cards_mod.presets()
+    return {
+        "presets": items,
+        "nextName": cards_mod.next_preset_name(items),
+        "max": cards_mod.PRESET_MAX,
+    }
+
+
+@router.post("/api/presets")
+def create_preset(payload: dict = Body(...)) -> dict:
+    """新建预设。
+
+    ⚠ **非法步骤在这里就拒掉**（400 + 逐条原因），不像"还原"那样跳过 ——
+    保存是用户当下看着链点的，链上有非法步骤说明前端已经坏了，
+    存进去只会让问题延后到某天点开预设时（§3.8.2 七）。
+    """
+    try:
+        steps, why = cards_mod.validate_steps(payload.get("steps"),
+                                              where=str(payload.get("name") or "预设"))
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    if why:
+        raise HTTPException(400, "；".join(why))
+    try:
+        item = cards_mod.add_preset({
+            "name": payload.get("name"),
+            "desc": payload.get("desc"),
+            "mode": payload.get("mode"),
+            "steps": steps,
+            "icons": payload.get("icons"),
+        })
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    logs.log(f"✚ 保存预设「{item['name']}」· {len(item['steps'])} 步 · "
+             f"{'串行' if item['mode'] == 'serial' else '并行'}", kind="ok")
+    return {"ok": True, "preset": item}
+
+
+@router.put("/api/presets/{pid}")
+def update_preset(pid: str, payload: dict = Body(...)) -> dict:
+    """改预设（重命名 / 改描述 / 改档位 / 改步骤 / 改图标）。"""
+    patch: dict = {}
+    for key in ("name", "desc", "mode", "icons"):
+        if key in payload:
+            patch[key] = payload[key]
+    if "steps" in payload:
+        try:
+            steps, why = cards_mod.validate_steps(
+                payload.get("steps"),
+                where=str(payload.get("name") or "预设"))
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+        if why:
+            raise HTTPException(400, "；".join(why))
+        patch["steps"] = steps
+    try:
+        item = cards_mod.update_preset(pid, patch)
+    except KeyError:
+        raise HTTPException(404, f"预设不存在: {pid}") from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    logs.log(f"✎ 修改预设「{item['name']}」", kind="ok")
+    return {"ok": True, "preset": item}
+
+
+@router.delete("/api/presets/{pid}")
+def delete_preset(pid: str) -> dict:
+    try:
+        ok = cards_mod.remove_preset(pid)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+    if not ok:
+        raise HTTPException(404, f"预设不存在: {pid}")
+    logs.log(f"🗑 删除预设 {pid}", kind="warn")
+    return {"ok": True}
+
+
+@router.delete("/api/presets")
+def reset_presets() -> dict:
+    """清空预设（测试用；**不动自定义卡片**）。"""
+    n = cards_mod.reset_presets()
+    return {"ok": True, "removed": n}
+
+
 @router.get("/api/cards/ops/{op}/preview")
 def preview_card(op: str, params: str = "{}") -> dict:
     """按参数渲染等价命令，给编辑器实时预览用。"""

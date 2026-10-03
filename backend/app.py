@@ -47,9 +47,17 @@ async def lifespan(_app: FastAPI):
             print("[startup] 工作区已是空的")
 
     store.init_db()
+    added = store.take_migration_log()
+    if added:
+        # 迁移**不能静默发生**：出问题时得有人知道库被改过
+        print(f"[startup] 数据库补列 {len(added)} 处: {', '.join(added)}")
     stale = store.reset_stale_running()
     if stale:
         print(f"[startup] 清理中断任务 {stale} 条")
+    stale_chain = store.reset_stale_chain_pending()
+    if stale_chain:
+        print(f"[startup] 清理中断的执行链任务 {stale_chain} 条")
+    store.release_all_leases()          # 内存态，重启即空（这里显式清一次，防止热重载残留）
     tasks.register_all(q_mod.queue_)
     q_mod.queue_.start()
     tc = toolchain.probe()
@@ -90,11 +98,26 @@ class NoCacheStatic(StaticFiles):
     浏览器于是按"启发式缓存"处理（新鲜期≈文件年龄的 10%）——
     改完 CSS 刷新页面，可能拿到的还是旧文件，表现为"我改了但界面没变"。
     本地工具不存在带宽问题，直接 no-cache（仍然走 304，开销极小）。
+
+    **`index.html` 额外用 `no-store`**：它引用 `app.js` / 各个 css，
+    一旦它自己被缓存住，后面引用的是哪一版就完全不由我们决定了。
+    这条真踩过 —— 后端修好、后端测试全绿，页面却一直是旧行为，
+    排查时把"缓存"当成了"逻辑错"，绕了很久。入口文件不值得为省一次
+    304 换来这种不确定性。
     """
 
     def file_response(self, *args, **kwargs):        # type: ignore[override]
         resp = super().file_response(*args, **kwargs)
         resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+        # 入口文件额外 no-store
+        try:
+            full = args[0] if args else kwargs.get("full_path")
+            name = str(getattr(full, "name", "") or full or "")
+            if name.endswith((".html", ".htm")):
+                resp.headers["Cache-Control"] = "no-store, must-revalidate"
+                resp.headers["Pragma"] = "no-cache"
+        except Exception:                            # noqa: BLE001
+            pass                                     # 拿不到路径就退回 no-cache
         return resp
 
 

@@ -91,9 +91,12 @@
     const realPrompt = window.prompt;
     window.prompt = () => 'comment=codeprobe';
 
-    // 69 张卡全部真跑会把 2 并发队列压满、几分钟才排空，
+    // 全部卡真跑会把 2 并发队列压满、几分钟才排空，
     // 而且"路由/参数是否正确"和"卡片数量"无关 —— 每个 op 验一张就够。
-    // 所以这里**按 op 去重**：12 个 op 各挑一张代表卡真执行。
+    // 所以这里**按 op 去重**，每个 op 各挑一张代表卡真执行。
+    // ⚠ 清单是**从 CARDS 现算**的，所以加 op 不用改这里；但加 op 时
+    // **必须同时加一张内置卡**，否则那个 op 在这条探针里没有入口
+    // （`smoke_api.py` 有一条硬断言盯着"每个操作都至少有一张内置卡"）。
     const byOp = new Map();
     for (const card of CARDS) if (!byOp.has(card.op)) byOp.set(card.op, card);
     const sample = [...byOp.values()];

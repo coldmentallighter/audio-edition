@@ -401,6 +401,12 @@ try:
         spec_json = json.loads(resp.read().decode("utf-8"))
     routes = {p.split("/api/ops/", 1)[1] for p in spec_json["paths"]
               if p.startswith("/api/ops/") and "{" not in p}
+    # `chain` 是**编排入口**，不是卡片操作：它一次提交整条链，
+    # 没有自己的参数规格（`OPS` 里也不该有它 —— 卡片是"一步"，
+    # 链是"一串步骤"）。它有自己的专项自检 tests/chain_build_check.py（46 项）。
+    # 这里显式排除，而不是把断言放松成"子集"——松了就再也发现不了
+    # "新增了一个 op 路由却忘了登记规格"这类问题。
+    routes.discard("chain")
 except Exception as e:                                   # noqa: BLE001
     check("能读到 openapi.json 取路由清单", False, e)
 
@@ -589,6 +595,23 @@ check("改内置卡返回 400", req("PUT", f"/api/cards/{bid}", {"name": "x", "o
 check("删内置卡返回 400", req("DELETE", f"/api/cards/{bid}")[0] == 400)
 check("删不存在的卡 404", req("DELETE", "/api/cards/c_nope")[0] == 404)
 
+# 卡片名**全局唯一**（内置 + 自定义）。
+# 用户实测：新建的卡取了内置卡的名字，结果"被识别成内置卡"、点开只有
+# 「查看 / 另存为…」，既改不了也删不掉 —— 因为卡片库是按名字认卡的，而
+# `all_cards()` 里内置在前，`CARDS.find(name)` 永远命中内置那张。
+_bname = next(c["name"] for c in cd3["cards"] if not c["custom"])
+s, e = req("POST", "/api/cards", {"name": _bname, "op": "probe", "cat": "自定义"})
+check("与内置卡重名的卡被拒（400）", s == 400, f"{s} {str(e)[:80]}")
+check("报错说清了撞的是内置卡", "内置卡片" in str(e), str(e)[:120])
+s, e = req("POST", "/api/cards", {"name": "冒烟-改名后", "op": "probe", "cat": "自定义"})
+check("与自定义卡重名也被拒（400）", s == 400, f"{s} {str(e)[:80]}")
+s, own = req("PUT", f"/api/cards/{new_id}",
+             {"name": "冒烟-改名后", "op": "convert", "params": {"format": "mp3"}})
+check("改卡但名字没动 → 200（撞自己不算重名）", s == 200, f"{s} {str(own)[:80]}")
+s, e = req("PUT", f"/api/cards/{new_id}",
+           {"name": _bname, "op": "convert", "params": {"format": "mp3"}})
+check("把自定义卡改名为内置卡的名字被拒（400）", s == 400, f"{s} {str(e)[:80]}")
+
 # 非法输入
 for label, body in [
     ("未知操作", {"name": "x", "op": "nope"}),
@@ -609,6 +632,13 @@ s, im = req("POST", "/api/cards/import", {"cards": ex["cards"]})
 check("重复导入被跳过（不覆盖）", im["count"] == 0 and im["skippedCount"] >= 1, im)
 s, im2 = req("POST", "/api/cards/import", {"cards": []})
 check("空导入返回 400", s == 400)
+# 导入里的重名卡：**跳过而不是覆盖**，且原因说得出来（导入声明里就是这条语义）
+s, im3 = req("POST", "/api/cards/import",
+             {"cards": [{"name": _bname, "op": "probe", "cat": "自定义", "params": {}}]})
+check("导入重名卡被跳过（不覆盖已有卡）",
+      s == 200 and im3["count"] == 0 and im3["skippedCount"] == 1, im3)
+check("跳过的原因写明了是重名",
+      "已经有一张叫" in str((im3["skipped"] or [{}])[0].get("reason", "")), im3)
 
 # 删掉冒烟建的卡
 s, cd4 = req("GET", "/api/cards")
@@ -766,6 +796,159 @@ check("不存在的文件 → 404", s == 404, s)
 for tid in tag_ids:
     req("DELETE", f"/api/files/{tid}?withDisk=true")
 
+print("== 19. 响度测量报告（loudness-report 真出一份 Markdown）==")
+# 这一节补的是**真的漏洞**：在这之前整个冒烟测试里没有一处碰过响度三兄弟，
+# 于是"三个 op 共用一个 handler、靠服务端注入的 `_op` 分流"这条接线
+# 一点回归保护都没有 —— 谁把注入删了都不会红。
+#
+# 文件名带随机后缀：产物路径是 `unique_path`（**永不覆盖**，撞了就加 `-1`/`-2`），
+# 固定名字会在"上一轮跑崩了没清理"时一路累加，而断言就从"路径对不对"
+# 变成"我这是第几次跑"。
+_suf = uuid.uuid4().hex[:6]
+# 先把**上一轮残留**的清掉（本脚本被打断时收尾不会执行，残留会让
+# `unique_path` 给这次加 `-1`）。只在 `outputs/loudness/` 里按前缀清，
+# 不碰用户自己的产物。
+for _old in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.md"):
+    _old.unlink(missing_ok=True)
+_lm = WORK / f"loud-report-{_suf}.flac"
+subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                "-i", "sine=frequency=220:duration=2.0", "-ac", "2", "-ar", "44100",
+                str(_lm)], check=True)
+# 后缀与内容**必须一致**（上传存的是 multipart 里的文件名，而下游按后缀判断容器）。
+raw, ctype = multipart({"paths": json.dumps([f"响度测试/报响-{_suf}.flac"])},
+                       [("files", f"报响-{_suf}.flac", _lm.read_bytes(), "audio/flac")])
+s, up = req("POST", "/api/upload", raw=raw, ctype=ctype)
+_lid = next((x["id"] for x in up.get("saved", []) if x["name"] == f"报响-{_suf}.flac"), None)
+check("上传一个用于报告的文件", _lid is not None, up)
+
+
+def wait_task_id(task_id, tries=120):
+    """按**任务 id** 等结案。
+
+    不能用 `wait_task(file_id)`：同一个文件连着提交两次时，
+    `/api/tasks/queue` 的 `recent` 里两条都在，取第一条会**永远拿到上一个任务**
+    —— 断言于是变成"上一条成功就算这条成功"。
+    """
+    for _ in range(tries):
+        _s, _t = req("GET", f"/api/tasks/{task_id}")
+        if _s == 200 and (_t or {}).get("state") in ("success", "failed"):
+            return _t
+        time.sleep(0.25)
+    return None
+
+
+# `force=true`：库里可能已经有这个文件的响度缓存，不强制重算就走缓存，
+# 那样即使 ebur128 那一趟全坏了也照样"成功"—— 断言会变成空转。
+s, sub = req("POST", "/api/ops/loudness-report",
+             {"fileIds": [_lid], "force": True, "detail": "full",
+              "timePoints": 3, "frameTable": False, "refLufs": -18})
+check("POST /api/ops/loudness-report 200", s == 200, sub)
+
+_row = wait_task_id((sub.get("taskIds") or [None])[0])
+check("报告任务成功", _row and _row.get("state") == "success",
+      (_row or {}).get("error") or _row)
+_res = (_row or {}).get("result") or {}
+_out = _res.get("output") or ""
+check("结果是 markdown 类型", _res.get("kind") == "markdown", _res.get("kind"))
+# 路径只断言**目录与后缀**，不断言精确文件名：`_out_path` 走 `unique_path`
+# （永不覆盖），**同一参数跑第二遍时合法地**变成 `报响-abc123-1.loudness.md`。
+# 这正是本节的第二条提交会走到的情况，所以这里不能钉死名字。
+check("落盘路径在 outputs/loudness/ 下",
+      _out.startswith("outputs/loudness/") and _out.endswith(".loudness.md")
+      and _suf in _out, _out)
+_md = ROOT / _out if _out else None
+check("报告文件真的存在且非空",
+      bool(_md and _md.exists() and _md.stat().st_size > 200),
+      _md.stat().st_size if (_md and _md.exists()) else "不存在")
+_txt = _md.read_text(encoding="utf-8") if (_md and _md.exists()) else ""
+# 小节标题按 `render_loudness_markdown` 实际的 `## ` 抬头写（`detail=full` 才有逐曲明细）。
+for _part in ("## 汇总", "## 自洽性校验", "## 响度分区", "## 逐曲明细"):
+    check(f"报告里有「{_part}」一节", _part in _txt, _part)
+check("报告里带上了源文件名", f"报响-{_suf}.flac" in _txt)
+check("refLufs 参数真的透传了（-18 出现在报告里）", "-18" in _txt, _txt[:200])
+# **量纲混用的回归钉子**：报告第一版拿真峰值（dBTP）和响度（LUFS）比大小，
+# 把"真峰值 > 0 dBTP"这种正常现象标成"顺序异常"。现在只比同量纲的两个响度，
+# 真峰值单独在旁边写警告。谁"修"回去都不会红 —— 所以这里钉住文案。
+check("自洽性校验不拿真峰值与响度比大小（量纲混用的钉子）",
+      "不同量纲" in _txt and "顺序异常" not in _txt, _txt[:300])
+# 服务端注入的 `_op` 不许被客户端覆盖：传了 `_op=loudness-image` 也必须出报告。
+# ⚠ 这一条**必须传 taskId 等它自己结案**：用 `wait_task(file_id)` 或"按文件找最近一条"
+# 会立刻拿到**上一条**（已 success）而"通过" —— 断言变成空转（这个坑真踩过，
+# 上一版这里就没等，于是后台任务在清理之后才落盘，多留一个文件）。
+s, sub2 = req("POST", "/api/ops/loudness-report",
+              {"fileIds": [_lid], "force": True, "_op": "loudness-image"})
+check("客户端伪造 `_op` 无效（服务端覆盖）", s == 200, sub2)
+_row2 = wait_task_id((sub2.get("taskIds") or [None])[0])
+check("第二条任务真的跑完了（没结案就是空转，必须红）",
+      _row2 is not None and _row2.get("state") == "success",
+      (_row2 or {}).get("state"))
+check("仍然出的是报告而不是 PNG",
+      ((_row2 or {}).get("result") or {}).get("kind") == "markdown",
+      ((_row2 or {}).get("result") or {}).get("kind"))
+
+req("DELETE", f"/api/files/{_lid}?withDisk=true")
+# 按**前缀**清这一节造出来的全部报告（两条提交 → 基准名 + `-1`）。
+# 只删 `报响-` 开头的，不碰用户自己的产物。
+for _p in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.md"):
+    _p.unlink(missing_ok=True)
+
+print("== 20. 导出响度分析图（loudness-image 真出一张 PNG）==")
+# 与 §19 同理：这一节证的是"路线 B 真的在出图"，而不是"任务成功了"。
+# 图的好坏由 `tests/loudness_png_check.py` 逐项验（轴映射/比例/确定性），
+# 这里只验**接线**：op → handler → 落盘 → 是一张能解码的 PNG。
+_suf2 = uuid.uuid4().hex[:6]
+for _old in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.png"):
+    _old.unlink(missing_ok=True)
+_lm2 = WORK / f"loud-img-{_suf2}.flac"
+subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                "-i", "sine=frequency=300:duration=3.0", "-ac", "2", "-ar", "44100",
+                str(_lm2)], check=True)
+raw, ctype = multipart({"paths": json.dumps([f"响度测试/报响-{_suf2}.flac"])},
+                       [("files", f"报响-{_suf2}.flac", _lm2.read_bytes(),
+                         "audio/flac")])
+s, up = req("POST", "/api/upload", raw=raw, ctype=ctype)
+_lid2 = next((x["id"] for x in up.get("saved", [])
+              if x["name"] == f"报响-{_suf2}.flac"), None)
+check("上传一个用于出图的文件", _lid2 is not None, up)
+
+s, sub3 = req("POST", "/api/ops/loudness-image",
+              {"fileIds": [_lid2], "force": True, "width": 1600, "highLufs": ""})
+check("POST /api/ops/loudness-image 200", s == 200, sub3)
+_row3 = wait_task_id((sub3.get("taskIds") or [None])[0])
+check("出图任务成功", _row3 is not None and _row3.get("state") == "success",
+      (_row3 or {}).get("error") or _row3)
+_res3 = (_row3 or {}).get("result") or {}
+_out3 = _res3.get("output") or ""
+check("结果是 image 类型", _res3.get("kind") == "image", _res3.get("kind"))
+check("落盘路径是 outputs/loudness/*.loudness.png",
+      _out3.startswith("outputs/loudness/") and _out3.endswith(".loudness.png")
+      and _suf2 in _out3, _out3)
+_png = ROOT / _out3 if _out3 else None
+check("PNG 真的存在且够大（不是 0 字节占位）",
+      bool(_png and _png.exists() and _png.stat().st_size > 5000),
+      _png.stat().st_size if (_png and _png.exists()) else "不存在")
+check("文件头是 PNG 签名",
+      bool(_png and _png.exists() and _png.read_bytes()[:8]
+           == b"\x89PNG\r\n\x1a\n"),
+      (_png.read_bytes()[:8] if (_png and _png.exists()) else None))
+# `width` 参数真的生效（不是画死 2400 再缩放）
+_w = _h = 0
+if _png and _png.exists():
+    _b = _png.read_bytes()
+    # IHDR 就在头 8 字节之后：4 字节长度 + 4 字节类型 + 宽 4 + 高 4
+    _w = int.from_bytes(_b[16:20], "big")
+    _h = int.from_bytes(_b[20:24], "big")
+check("`width=1600` 真的画成 1600 宽（读 PNG 的 IHDR，不是看参数）",
+      _w == 1600, (_w, _h))
+check("高度按同一比例（约 287，不是拉伸）", 270 <= _h <= 300, (_w, _h))
+# 空串 `highLufs` 必须被当成"未设置"而不是报错（曾经会 400）
+check("空串 highLufs 被当成未设置（不报'必须是数字'）",
+      "必须是数字" not in str(_res3.get("error") or ""), _res3.get("error"))
+
+req("DELETE", f"/api/files/{_lid2}?withDisk=true")
+for _p in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.png"):
+    _p.unlink(missing_ok=True)
+
 print(f"\n结果：{ok} passed, {fail} failed")
 
 # ---- 清理：把本次上传的测试文件全部删掉，不污染用户的库 ----
@@ -773,8 +956,9 @@ print("== 清理本次上传的测试文件 ==")
 s, fl = req("GET", "/api/files")
 files = fl["files"] if isinstance(fl, dict) else fl
 junk = [x for x in files if x["name"] in ("测试音.wav", "evil.wav", "有封面.flac", "cover.png")
-        or x["name"].startswith(("evil-", "b0", "b1", "b2"))
-        or x.get("relPath", "").startswith(("冒烟测试/", "abs/", "C_/", "a/", "封面测试/", "covers/", "批删/"))]
+        or x["name"].startswith(("evil-", "报响-", "b0", "b1", "b2"))
+        or x.get("relPath", "").startswith(("冒烟测试/", "abs/", "C_/", "a/", "封面测试/",
+                                            "covers/", "批删/", "响度测试/"))]
 for x in junk:
     # withDisk=true：DELETE 默认只从库里摘掉、保留磁盘原文件（软删除），
     # 测试垃圾要连磁盘一起清，否则 uploads/ 会越堆越多。
@@ -782,6 +966,25 @@ for x in junk:
 print(f"        删除 {len(junk)} 个：{[x['name'] for x in junk]}")
 req("DELETE", "/api/logs")
 print("        已清空日志缓冲")
+
+# 造音频用的临时目录也要清：`_smoke_tmp` 里的 wav/flac/png 从来没人删过，
+# 于是在仓库里越堆越多（每轮十几个）。测试的垃圾不该留在工作区。
+import shutil as _shutil                                            # noqa: E402
+_made = len(list(WORK.glob("*"))) if WORK.exists() else 0
+_shutil.rmtree(WORK, ignore_errors=True)
+print(f"        清掉临时目录 {WORK.name}/（{_made} 个文件）")
+
+# `outputs/` 也要清：本节造的产物（提取封面出的 `covers/cover.jpg`、打包出的
+# `zips/batch.zip`、响度报告…）以前全都留着，每跑一轮就往用户的工作区里堆一批。
+# 工作区本来就是"每次启动清空"的，清掉不会丢用户的东西；不清则会让
+# "我刚跑的测试到底产出了什么"越来越难分辨。
+_outs = [p for p in (ROOT / "outputs").rglob("*") if p.is_file()]
+for _p in _outs:
+    _p.unlink(missing_ok=True)
+for _d in sorted((ROOT / "outputs").rglob("*"), reverse=True):
+    if _d.is_dir() and not any(_d.iterdir()):
+        _d.rmdir()
+print(f"        清掉 outputs/ 产物 {len(_outs)} 个")
 
 s, fl = req("GET", "/api/files")
 left = len(fl["files"] if isinstance(fl, dict) else fl)

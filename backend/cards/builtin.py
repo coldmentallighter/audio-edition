@@ -69,6 +69,26 @@ BUILTIN_CARDS: list[dict[str, Any]] = [
      "desc": "批量打包为一个压缩包", "tier": "一键", "ico": "zip",
      "op": "zip", "params": {}},
 
+    # 响度分析（新增的两个 op 各至少一张卡：没有卡片的操作在抽屉里没有入口，
+    # 自检 tests/smoke_api.py 里有一条硬断言盯着这件事）
+    {"id": "b_loudness", "cat": "响度", "name": "响度总览图",
+     "desc": "ebur128 逐帧响度 + 8 项指标（Integrated / LRA / PLR / 真峰值）",
+     "tier": "一键", "ico": "gain", "op": "loudness", "params": {"force": False}},
+    {"id": "b_loudness_image", "cat": "响度", "name": "导出响度分析图",
+     "desc": "渲染成 PNG（双色包络 + 非线性纵轴 + 时间刻度 + 8 项指标），"
+             "落 outputs/loudness/",
+     "tier": "配置", "ico": "gain", "op": "loudness-image",
+     # `highLufs` 留空 = 自动（Integrated + LRA/2）。
+     # ⚠ 这个键**改过一次名**（原 `headLufs`）—— 改名时漏改这张卡，
+     # `smoke_api.py` 的"72 张内置卡片全部通过参数校验"当场就红了。
+     # 内置卡片是**数据**不是代码，改参数名一定要全库搜一遍。
+     "params": {"width": 2400, "refLufs": -23, "highLufs": "", "force": False}},
+    {"id": "b_loudness_report", "cat": "响度", "name": "响度分析报告",
+     "desc": "写成 Markdown：汇总表 + 8 项指标 + 响度分区 + 最响/最轻时间点",
+     "tier": "配置", "ico": "tag", "op": "loudness-report",
+     "params": {"detail": "summary", "timePoints": 5, "frameTable": False,
+                "refLufs": -23, "force": False}},
+
     # ===== A 轴：纯预设卡（同一个 op，不同参数组合）=====
     # 全部零后端改动 —— 只走 OPS 里已有的参数空间。
     {"id": "b_convert_01", "cat": "格式转换", "name": "转 Opus 96k", "desc": "语音/播客存档，同听感体积约为 MP3 的 60%", "tier": "一键", "ico": "flac", "op": "convert", "params": {"format": "opus", "bitrate": "96k"}},

@@ -53,6 +53,10 @@
     out.saveAsHiddenForBuiltin = document.getElementById('cardSaveAs').hidden;
     out.deleteHiddenForBuiltin = document.getElementById('cardDelete').hidden;
     out.prefilledName = document.getElementById('cardName').value;
+    // 内置卡那个「保存」是**新建**（按钮文案就是「创建卡片」），所以默认名必须
+    // 避开内置卡本名：卡片名全局唯一，预填本名会被后端 400 顶回来
+    // （以前是静默建出一张同名的自定义卡，而那张卡在库里点不开）。
+    out.prefilledNameAvoidsBuiltin = out.prefilledName !== out.builtinName;
     out.opDescShown = (txt('#cardOpDesc') || '').slice(0, 40);
     out.previewShown = txt('#cardPreview');
     out.paramRows = n('#cardParams .pspec');
@@ -184,6 +188,10 @@
       badEnum: await bad({ name: 'x', op: 'convert', params: { format: 'exe' } }),
       outOfRange: await bad({ name: 'x', op: 'normalize', params: { targetLufs: -99 } }),
       noName: await bad({ op: 'convert' }),
+      // 卡片名全局唯一：撞内置卡的名字必须被拒（用户实测踩的坑 —— 同名的新卡
+      // 在库里永远点不开，因为卡片库是按名字认卡的）
+      dupBuiltinName: await bad({ name: out.builtinName, op: 'probe', cat: '自定义' }),
+      dupCustomName: await bad({ name: '探针-改名后', op: 'probe', cat: '自定义' }),
     };
 
     /* ---------- 8. 清理：删掉探针建的卡 ---------- */

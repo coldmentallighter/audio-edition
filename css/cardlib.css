@@ -24,10 +24,97 @@
 .fcard--new { border-style: dashed; justify-content: center; align-items: center; text-align: center; color: var(--text-muted); }
 .fcard--new:hover { color: var(--ink); }
 
+
+.pcard {
+  position: relative;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 13px;
+  text-align: left;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-app);
+  color: inherit; font: inherit;
+  cursor: pointer;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 40%, transparent);
+}
+.pcard:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--tint-primary) , var(--bg-app));
+}
+
+/* 半调（AM 网点）的承载层：4 层里的 3 层靠它的两个伪元素撑起来。
+   结构和 `.fcard__dots` 一模一样，样式在 cardlib.css（两族卡片共用一份）。
+   **必须是卡片的直接子元素**（选择器写的是 `>`），且内容要压在它上面。 */
+.pcard__dots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+  /* ⚠ 必须自己带 opacity 过渡：cardlib.css 里那条 `.pcard > .pcard__dots` 的
+     特异性(0,2,0)高于 `.pcard`(0,1,0)，会把卡片本体上的 transition **整条顶掉** ——
+     网点会"啪"地出现而不是淡入。这条也是 (0,1,0)，但它在文件后面，赢。 */
+  transition: opacity .28s ease;
+}
+.pcard:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+
+/* 图标平铺：每个格子沿用功能卡片那套玻璃方块，2×2 的卡里放大到 34px。
+   ⚠ 格子里是**图形**（`svg(ico)`），不是 `FLAC`/`TAG` 这种短名文字 ——
+   同一个 `ico` 键在功能卡片上是图形，在预设卡片上也得是图形，
+   否则同一个抽屉里出现两套表达（§10.6.3）。 */
+.pcard__icons { display: flex; align-items: center; gap: 7px; flex-wrap: nowrap; }
+.pcard__ico {
+  width: 34px; height: 34px; flex: 0 0 34px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+/* 18px 是 34px 方块的通用搭档尺寸：再大线会顶到圆角，再小细节糊成一团 */
+.pcard__ico svg { width: 18px; height: 18px; display: block; }
+/* 省略号**必须与图标同宽同高**：6 格和 5 格的排布才不会跳（§3.8.2 三） */
+.pcard__ico--more { font-size: 15px; line-height: 1; font-weight: 600; }
+
+.pcard__name { font-size: 14px; font-weight: 600; }
+.pcard__desc {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pcard__foot { display: flex; align-items: center; gap: 6px; margin-top: auto; }
+
+/* 未知卡片（§9.1.2 一）：**高亮不是禁用** —— 快照齐全时它照样能跑 */
+.pcard.is-unknown { border-left: 3px solid var(--error-solid); }
+.pcard__warn {
+  position: absolute; top: 10px; right: 10px;
+  /* 网点层有一层是 `.pcard::after`（画在**所有**子节点之上），所以要显式抬到它上面，
+     否则 hover 时「N 未知」会被半调点压住。对勾（`.fcard::before`）用的是同一个值。 */
+  z-index: 3;
+  font-size: 10px; font-weight: 600;
+  padding: 2px 7px; border-radius: 999px;
+  color: #2a1c00; background: var(--error-solid);
+}
+
 /* ============ 卡片光标跟随 ============ */
 
+/* ⚠ 这一整段的效果**同时作用于** `#cardSections .fcard` 与 `#presetSections .pcard`
+   （预设卡片，见 drawer.css 的 .pcard）。
+   两处必须一起写进每条选择器：网点层的画序、4 层点径、触屏关闭都是"少改一处就
+   静默坏掉"的东西（少改的那一族卡片会表现得像"没有效果"，不报任何错）。
+   两边共用的前提有两条，改动时别破坏：
+     · 卡片里都有承载网点层的 `<span class="*__dots" aria-hidden="true">`
+     · 两个容器都调过 `bindFollow(...)`（`initCardFollow` / `initPresetFollow`）
+   `fcard--new` / `fcard--blocked` / `is-added` 这些是功能卡片专有的，不跟过来。 */
+
 /* 1. 卡片裁剪容器 + 底色渐变层 */
-#cardSections .fcard {
+#cardSections .fcard,
+#presetSections .pcard {
   position: relative;
   overflow: hidden;
   isolation: isolate;
@@ -44,12 +131,19 @@
    背景整个不画。踩过：外层两层网点在画面上完全消失，量出来跟底色一模一样。 */
 #cardSections .fcard::after,
 #cardSections .fcard > .fcard__dots::before,
-#cardSections .fcard > .fcard__dots::after { content: "";}
+#cardSections .fcard > .fcard__dots::after,
+#presetSections .pcard::after,
+#presetSections .pcard > .pcard__dots::before,
+#presetSections .pcard > .pcard__dots::after { content: "";}
 
 #cardSections .fcard::after,
 #cardSections .fcard > .fcard__dots,
 #cardSections .fcard > .fcard__dots::before,
-#cardSections .fcard > .fcard__dots::after {
+#cardSections .fcard > .fcard__dots::after,
+#presetSections .pcard::after,
+#presetSections .pcard > .pcard__dots,
+#presetSections .pcard > .pcard__dots::before,
+#presetSections .pcard > .pcard__dots::after {
   position: absolute;
   inset: 0;
   pointer-events: none;
@@ -64,10 +158,15 @@
 #cardSections .fcard:hover::after,
 #cardSections .fcard:hover > .fcard__dots,
 #cardSections .fcard:hover > .fcard__dots::before,
-#cardSections .fcard:hover > .fcard__dots::after { opacity: 1; }
+#cardSections .fcard:hover > .fcard__dots::after,
+#presetSections .pcard:hover::after,
+#presetSections .pcard:hover > .pcard__dots,
+#presetSections .pcard:hover > .pcard__dots::before,
+#presetSections .pcard:hover > .pcard__dots::after { opacity: 1; }
 
 /* 保底：不支持 mask 时用回实心光晕，绝不出现"整卡铺满网点"的破图 */
-#cardSections .fcard::after {
+#cardSections .fcard::after,
+#presetSections .pcard::after {
   background-image: radial-gradient(
     circle at var(--mx, 50%) var(--my, 50%),
     color-mix(in srgb, var(--spot-mix-base) var(--spot-a1), transparent) 0%,
@@ -81,7 +180,11 @@
   #cardSections .fcard::after,
   #cardSections .fcard > .fcard__dots,
   #cardSections .fcard > .fcard__dots::before,
-  #cardSections .fcard > .fcard__dots::after {
+  #cardSections .fcard > .fcard__dots::after,
+  #presetSections .pcard::after,
+  #presetSections .pcard > .pcard__dots,
+  #presetSections .pcard > .pcard__dots::before,
+  #presetSections .pcard > .pcard__dots::after {
     -webkit-mask-image: radial-gradient(circle at var(--mx, 50%) var(--my, 50%),
         rgb(0 0 0 / var(--spot-a1)) 0%,
         rgb(0 0 0 / var(--spot-a2)) calc(var(--spot-reach) * 0.62),
@@ -97,25 +200,29 @@
      → `.fcard::after`（父元素的 ::after 是最后一个子节点，画在最上面）。
      所以最小的那层要放 `.fcard__dots`，最大的放 `.fcard::after` ——
      放反了的话，小点会盖在大点上面，点芯颜色和"近大远小"的观感一起坏掉。 */
-  #cardSections .fcard > .fcard__dots {
+  #cardSections .fcard > .fcard__dots,
+  #presetSections .pcard > .pcard__dots {
     --spot-reach: var(--spot-reach-1);
     background-image: radial-gradient(circle closest-side,
       color-mix(in srgb, var(--spot-mix-base) var(--spot-alt-a), transparent) 0 var(--spot-dot-1),
       transparent calc(var(--spot-dot-1) + 1%));
   }
-  #cardSections .fcard > .fcard__dots::before {
+  #cardSections .fcard > .fcard__dots::before,
+  #presetSections .pcard > .pcard__dots::before {
     --spot-reach: var(--spot-reach-2);
     background-image: radial-gradient(circle closest-side,
       var(--spot-mix-base) 0 var(--spot-dot-2),
       transparent calc(var(--spot-dot-2) + 1%));
   }
-  #cardSections .fcard > .fcard__dots::after {
+  #cardSections .fcard > .fcard__dots::after,
+  #presetSections .pcard > .pcard__dots::after {
     --spot-reach: var(--spot-reach-3);
     background-image: radial-gradient(circle closest-side,
       var(--spot-mix-base) 0 var(--spot-dot-3),
       transparent calc(var(--spot-dot-3) + 1%));
   }
-  #cardSections .fcard::after {
+  #cardSections .fcard::after,
+  #presetSections .pcard::after {
     --spot-reach: var(--spot-reach-4);
     background-image: radial-gradient(circle closest-side,
       var(--spot-mix-base) 0 var(--spot-dot-4),
@@ -125,18 +232,21 @@
 
 /* .fcard__dots 是卡片子元素，会被上面那条 `> *` 抬到 z-index 1（压住文字）——
    这里必须显式按回 0：它是网点层，得待在内容下面。 */
-#cardSections .fcard > .fcard__dots {
+#cardSections .fcard > .fcard__dots,
+#presetSections .pcard > .pcard__dots {
   z-index: 0;
 }
 
 /* 内容抬到渐变层之上 */
-#cardSections .fcard > * {
+#cardSections .fcard > *,
+#presetSections .pcard > * {
   position: relative;
   z-index: 1;
 }
 
 /* 2. 整卡跟随：位移 + 3D 倾斜 */
-#cardSections .fcard:not(.fcard--new) {
+#cardSections .fcard:not(.fcard--new),
+#presetSections .pcard {
   transform:
     perspective(600px)
     translate3d(
@@ -149,10 +259,14 @@
   transform-origin: center center;
   perspective: 800px;
   perspective-origin: center center;
+  /* `scale` 也在这条里：按下反馈（:active 的 scale .94）要能弹回来。
+     fcard 那条"松手弹回"的规则会覆盖它，两条的值一致。 */
   transition: transform .18s cubic-bezier(.22, .61, .36, 1),
+              scale     .18s cubic-bezier(.22, .61, .36, 1),
               background .14s, border-color .14s, box-shadow .14s;
 }
-#cardSections .fcard:not(.fcard--new):hover {
+#cardSections .fcard:not(.fcard--new):hover,
+#presetSections .pcard:hover {
   box-shadow:
     /*0 0px 24px color-mix(in srgb, var(--fill-primary) 25%, transparent ),*/
     0 2px 6px  color-mix(in srgb, var(--on-fill) 25%, rgba(0, 0, 0, 0.2) );
@@ -160,24 +274,29 @@
 }
 
 /* 3. 内部元素视差 */
-#cardSections .fcard:hover .fcard__ico{
+#cardSections .fcard:hover .fcard__ico,
+#presetSections .pcard:hover .pcard__ico {
   background: linear-gradient(.35turn, #fff4, #fff5);
   box-shadow:0px 0px 4px  color-mix(in srgb, var(--fill-primary) 50%,transparent );
   border: 1px solid rgba(255,255,255,0.3);
   backdrop-filter: blur(2px) saturate(1.2);
   -webkit-backdrop-filter: blur(2px) saturate(1.2);
-  transition: background-color .14s, backdrop-filter .14s, -webkit-backdrop-filter .14s;
+  /* `scale` 带上：按下时卡片缩到 .94，图标自己那条 transition 得能补间 */
+  transition: background-color .14s, backdrop-filter .14s, -webkit-backdrop-filter .14s,
+              scale .18s cubic-bezier(.22, .61, .36, 1);
 }
 /* 关掉 3D 跟随（html[data-fx="off"]）时，hover 的图标不再叠毛玻璃。
    这层模糊本来是为 3D 视差服务的 —— 图标要"浮"在卡片内容之上，需要一点厚度感；
    关掉 3D 之后它只剩下"每帧重新模糊一次"的代价，观感上也不再需要。
    只去 backdrop-filter：半透明白渐变 / 白描边 / 发光阴影按原样保留。
    特异性够（比上面那条多一个属性选择器），不依赖文件顺序。 */
-html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
+html[data-fx="off"] #cardSections .fcard:hover .fcard__ico,
+html[data-fx="off"] #presetSections .pcard:hover .pcard__ico {
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
 }
-#cardSections .fcard:not(.fcard--new) .fcard__ico {
+#cardSections .fcard:not(.fcard--new) .fcard__ico,
+#presetSections .pcard .pcard__ico {
   --kx:   0.5;      /* 右移 X 衰减 */
   --kyRaw:0.4;      /* Y 原始量衰减，主调这个（下移过多就压小） */
   --kz:   0.5;      /* 正 z 衰减 */
@@ -203,7 +322,9 @@ html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
     rotateX(calc(min(0deg, var(--rx)) + max(0deg, var(--rx)) * 1)) /* rx 已衰减 */
     rotateY(calc(min(0deg, var(--ry)) + max(0deg, var(--ry)) * var(--kry)));
 
-  transition: transform .14s ease-out, box-shadow .1s ease;
+  /* 同上：图标自己的 transition 里也要带 `scale`（按下反馈在图标上也看得见） */
+  transition: transform .14s ease-out, scale .18s cubic-bezier(.22, .61, .36, 1),
+              box-shadow .1s ease;
 }
 #cardSections .fcard:is(.fcard--new) .fcard__ico {
   --k: 0.5;                                  /* ← 右移衰减系数，主调这个 */
@@ -222,25 +343,30 @@ html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
 }
 
 
-#cardSections .fcard:not(.fcard--new):hover .fcard__desc {
+#cardSections .fcard:not(.fcard--new):hover .fcard__desc,
+#presetSections .pcard:hover .pcard__desc {
   -webkit-text-stroke: 3px var(--tint-primary);
   paint-order: stroke fill;
 }
-#cardSections .fcard:not(.fcard--new):hover .fcard__name {
+#cardSections .fcard:not(.fcard--new):hover .fcard__name,
+#presetSections .pcard:hover .pcard__name {
   -webkit-text-stroke: 1px var(--tint-primary);
   paint-order: stroke fill;
 }
 
-#cardSections .fcard:not(.fcard--new) .fcard__name {
+#cardSections .fcard:not(.fcard--new) .fcard__name,
+#presetSections .pcard .pcard__name {
   translate: calc(var(--nx, 0) * 2px) calc(var(--ny, 0) * 1px);
   transition: translate .12s ease-out;
 }
-#cardSections .fcard:not(.fcard--new) .fcard__desc {
+#cardSections .fcard:not(.fcard--new) .fcard__desc,
+#presetSections .pcard .pcard__desc {
   translate: calc(var(--nx, 0) * 1px) calc(var(--ny, 0) * .5px);
   transition: translate .12s ease-out;
 
 }
-#cardSections .fcard:not(.fcard--new) .fcard__foot {
+#cardSections .fcard:not(.fcard--new) .fcard__foot,
+#presetSections .pcard .pcard__foot {
   translate: calc(var(--nx, 0) * 1px);
   transition: translate .12s ease-out;
 }
@@ -252,27 +378,36 @@ html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
    真正的动画只在 hover 时发生，所以提示也只给 hover 期间。 */
 #cardSections .fcard:not(.fcard--new):hover,
 #cardSections .fcard:not(.fcard--new):hover .fcard__ico,
-#cardSections .fcard--new:hover .fcard__ico {
+#cardSections .fcard--new:hover .fcard__ico,
+#presetSections .pcard:hover,
+#presetSections .pcard:hover .pcard__ico {
   will-change: transform;
 }
 
 /* 4. 触屏关闭所有跟随 */
 @media (hover: none) {
-  #cardSections .fcard::after { display: none; }
-  #cardSections .fcard:not(.fcard--new) {
+  #cardSections .fcard::after,
+  #presetSections .pcard::after { display: none; }
+  #cardSections .fcard:not(.fcard--new),
+  #presetSections .pcard {
     transform: none !important;
   }
   #cardSections .fcard .fcard__ico,
   #cardSections .fcard .fcard__name,
   #cardSections .fcard .fcard__desc,
-  #cardSections .fcard .fcard__foot {
+  #cardSections .fcard .fcard__foot,
+  #presetSections .pcard .pcard__ico,
+  #presetSections .pcard .pcard__name,
+  #presetSections .pcard .pcard__desc,
+  #presetSections .pcard .pcard__foot {
     translate: none !important;
   }
 }
 /* ============ 卡片点击反馈 ============ */
 
 /* 按下：轻微缩小 + 阴影收拢，像被按下去 */
-#cardSections .fcard:not(.fcard--new):active {
+#cardSections .fcard:not(.fcard--new):active,
+#presetSections .pcard:active {
   scale: 0.94;
   box-shadow: var(--shadow-sm),
               0 0 0 2px var(--tint-primary) inset;
@@ -280,7 +415,11 @@ html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
               box-shadow .09s ease-out;
 }
 
-/* 松手：快速弹回 */
+/* 松手：快速弹回。
+   ⚠ 这里**不写通用的 `.pcard` 过渡**：`.pcard__name/__desc/__foot/__ico` 各有自己的
+   transition（视差 + hover 玻璃态），再给卡片本体来一条同特异性的通用规则就会把它们
+   一起顶掉 —— 表现是"按下有反馈、但图标 hover 不再变玻璃"这种半坏。
+   `.pcard` 的过渡写在下面它自己那两条规则里（跟随 / 图标），这里只管 fcard。 */
 #cardSections .fcard:not(.fcard--new) {
   transition:
     transform .18s cubic-bezier(.22, .61, .36, 1),
@@ -292,11 +431,31 @@ html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
 
 /* 触屏：按下反馈保留，缩放更明显一点，手指感知更强 */
 @media (hover: none) {
-  #cardSections .fcard:not(.fcard--new):active {
+  #cardSections .fcard:not(.fcard--new):active,
+  #presetSections .pcard:active {
     scale: 0.94;
   }
 }
+/* ============ 不可选：链尾决定（方案 §3.2.4） ============
+   典型：`打包 ZIP` 之后所有卡片都不可选 —— ZIP 交出的是压缩包，
+   没有任何 op 接得住它。**只置灰并给原因，不隐藏**：藏起来用户会以为
+   "这张卡不见了"，置灰 + title 才说明得了"是顺序的问题，不是功能没了"。 */
+#cardSections .fcard.fcard--blocked {
+  opacity: .42;
+  cursor: not-allowed;
+  filter: saturate(.35);
+}
+#cardSections .fcard.fcard--blocked:hover {
+  background: var(--bg-surface-alt);
+  border-color: var(--border);
+  box-shadow: none;
+  transform: none;
+}
+/* 置灰时**不要**再显示"已在链中"的对勾 —— 两者语义冲突 */
+#cardSections .fcard.fcard--blocked::before { opacity: 0 !important; scale: .4 !important; }
+
 /* ============ 已加入执行链：右上角对勾（常驻伪元素 + transition） ============ */
+
 
 #cardSections .fcard::before {
   content: "✓";
@@ -335,7 +494,8 @@ html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
 @media (prefers-reduced-motion: reduce) {
   #cardSections .fcard::before { transition: none; }
   /* 网点本身不是位移动画，保留；只去掉淡入 */
-  #cardSections .fcard::after { transition: none; }
+  #cardSections .fcard::after,
+  #presetSections .pcard::after { transition: none; }
 }
 /* 搜索：固定在窗口最底部，点击唤出 + 缓出 */
 .drawer__search {
@@ -369,6 +529,17 @@ html[data-fx="off"] #cardSections .fcard:hover .fcard__ico {
 }
 .drawer__search[data-search="open"] .searchbtn { display: none; }
 .drawer__search[data-search="open"] .searchfield { max-width: 100%; opacity: 1; }
+
+/* 收起但过滤词还在（失焦收回保留了过滤）：按钮上挂个小点提示，
+   免得用户以为卡片丢了 —— 再点一次即可继续编辑/清除。 */
+.drawer__search[data-filtered="true"] .searchbtn {
+  background: var(--tint-primary); color: var(--ink); border-color: var(--border-strong);
+}
+.drawer__search[data-filtered="true"] .searchbtn::after {
+  content: ''; flex: 0 0 auto;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; opacity: .7;
+}
 .input--search { flex: 1 1 auto; min-width: 0; width: auto; }
 
 /* 执行链：容器已移到顶栏（.chainbar），这里只保留链本身的外观 */

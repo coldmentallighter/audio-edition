@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Body, HTTPException
 
-from backend import queue as q_mod, store, tasks
+from backend import chain, queue as q_mod, store, tasks
+from backend.cards.specs import task_params
 
 router = APIRouter()
 
@@ -137,6 +138,84 @@ def op_remove_cover(payload: dict = Body(...)) -> dict:
     files = _require_files(payload.get("fileIds") or [])
     res = q_mod.submit_batch("cover_remove", [f.id for f in files], lambda _fid: {})
     return res
+
+
+# ---------------------------------------------------------------- 响度分析
+# 两个 op 共用 `loudness` 任务类型：`loudness` 只算并缓存（前端画 Canvas），
+# `loudness-image` 另外导出一张 PNG。路由名里的连字符与任务类型的下划线
+# 是两套命名，卡片里的 `op` 字段必须与**路由名**一致（否则卡片执行会 404）。
+
+def _loudness_params(payload: dict) -> dict:
+    return {k: v for k, v in payload.items() if k != "fileIds"}
+
+
+def _submit_loudness(payload: dict, op: str) -> dict:
+    """三个响度 op 共用一个 handler，靠 `params._op` 分流（handler 里读它）。
+
+    ⚠ `_op` 由**服务端**塞进去，不接受客户端指定 —— 否则谁都能让
+    `loudness` 这个卡片去写报告文件（`_op` 是内部约定，不是参数）。
+    注入这件事统一在 `specs.task_params` 里做，**执行链那条建任务路径也要走它**
+    （少了它链上的报告/图会静默退化成只算缓存，见 specs.task_params 的注释）。
+    """
+    files = _require_files(payload.get("fileIds") or [])
+    params = task_params(op, _loudness_params(payload))
+    return q_mod.submit_batch("loudness", [f.id for f in files], lambda _fid: params)
+
+
+@router.post("/api/ops/loudness")
+def op_loudness(payload: dict = Body(...)) -> dict:
+    """响度总览图：算时间线 + 8 项指标，按文件缓存。"""
+    return _submit_loudness(payload, "loudness")
+
+
+@router.post("/api/ops/loudness-image")
+def op_loudness_image(payload: dict = Body(...)) -> dict:
+    """导出响度分析图（PNG）。**图的像素级复刻尚未实现**，见 tasks.h_loudness。"""
+    return _submit_loudness(payload, "loudness-image")
+
+
+@router.post("/api/ops/loudness-report")
+def op_loudness_report(payload: dict = Body(...)) -> dict:
+    """导出响度分析报告（Markdown），落 outputs/loudness/。"""
+    return _submit_loudness(payload, "loudness-report")
+
+
+# ================================================================ 执行链
+#
+# 一次提交整条链（方案 §3.2）。取代原来前端"每步一次 HTTP"的循环 ——
+# 那种做法下 `await` 的只是"任务建好了"，步骤之间没有任何屏障，
+# 而且后端拿到的每一批都互不相干，所以"链"根本接不起来（§1.1）。
+
+@router.post("/api/ops/chain")
+def op_chain(payload: dict = Body(...)) -> dict:
+    """一次提交整条执行链。
+
+    body:
+        mode     "serial" | "parallel"（缺省 parallel）
+        fileIds  作用域，**所有步骤共用**
+        steps    [{cardId?, name?, op, params}, …]，顺序即语义
+
+    `mode="serial"` 时会给每条任务写上 `src_task_id`（指向同一文件的上一步），
+    于是调度器按"**每个文件自己的流水线**"推进：同一文件内严格有序、
+    不同文件之间并行（§3.1.1）。
+
+    400 的响应体里带 `stepIdx`，前端据此把链上那一步标红而不是笼统报错。
+    """
+    try:
+        return chain.build_chain(payload)
+    except chain.ChainError as e:
+        raise HTTPException(400, {"message": e.message, "stepIdx": e.step_idx}) from None
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from None
+
+
+@router.get("/api/chains/{chain_id}")
+def get_chain(chain_id: str) -> dict:
+    """链的整体状态：每步进度 + 每个文件走到第几步（方案 §3.7 的状态点/角标）。"""
+    snap = store.chain_snapshot(chain_id)
+    if not snap["steps"]:
+        raise HTTPException(404, "没有这条链")
+    return snap
 
 
 # ================================================================ 进度推送（SSE）

@@ -24,6 +24,9 @@ ROOT = Path(__file__).resolve().parent.parent
 WORK = Path(__file__).resolve().parent / "_axis_tmp"
 WORK.mkdir(exist_ok=True)
 
+sys.path.insert(0, str(ROOT))
+from backend.cards.specs import OPS                                  # noqa: E402
+
 ok = fail = 0
 
 
@@ -209,7 +212,10 @@ for c in cd["cards"]:
     if c["custom"] or c["op"] in ops_seen:
         continue
     ops_seen[c["op"]] = c
-check(f"覆盖 {len(ops_seen)} 个 op", len(ops_seen) == 12, sorted(ops_seen))
+# 期望的 op 个数**从后端算**，不写死：写死的话每加一个 op 这条断言就红一次，
+# 而它真正想证的是"卡片库里每个 op 都有代表卡、参数能被后端接受"。
+check(f"覆盖 {len(ops_seen)} 个 op（后端共 {len(OPS)} 个）",
+      len(ops_seen) == len(OPS), sorted(ops_seen))
 
 # 收尾
 req("DELETE", f"/api/files/{fid}?purge=true&withDisk=true")

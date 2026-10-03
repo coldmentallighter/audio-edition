@@ -57,8 +57,8 @@
 :root[data-theme="t1"] {
   /* 墨色 —— --bg-* 与 --tint-* 上的正文色；本套色板为浅色底，白字不可用 */
   --ink:            #24445E;
-  --ink-accent:     #24445E;
-  --ink-error:      #24445E;
+  --ink-accent:     #5e3f24;
+  --ink-error:      #245e28;
   --text-muted:     rgb(36 68 94 / 0.62);
   --text-disabled:  rgb(75 87 99 / 0.38);
   /* 背景三层：白面 / 极浅页底 / 中性内嵌槽（配 --ink） */

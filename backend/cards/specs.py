@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from backend.tasks import (BITRATES, CHANNELS, FLAC_LEVELS, FORMAT_ARGS,
@@ -215,12 +216,170 @@ OPS: dict[str, dict[str, Any]] = {
     "zip": {
         "task": "zip",
         "label": "打包 ZIP",
-        "desc": "把这一批文件打成一个 ZIP，放在 outputs/zips/。",
+        "desc": "把这一批文件打成一个 ZIP，放在 outputs/zips/。"
+                "在链上时，它装的是**它之前那一步的最终产物**；它自己是第一项时装源文件。",
         "category": "校验/打包", "icon": "zip", "params": [],
         "preview": "zip <输出.zip> <文件...>",
+    },
+    # ---------------------------------------------------------------- 响度分析
+    # 数据来自单趟 `ebur128=peak=true:framelog=verbose`（见
+    # 响度总览图（LoudnessAnalysis）实现构想.md §2.1：3:07 的歌实测 0.7s）。
+    # 两个 op 都是**只读**：`loudness` 只往缓存里写 JSON 时间线，`loudness-image`
+    # 另外导出一张 PNG。它们都不改 `uploads/` 里的文件（contract.py 里 mode=read）。
+    "loudness": {
+        "task": "loudness",
+        "label": "响度总览图",
+        "desc": "跑一遍 ebur128 拿到逐帧 M/S/I 时间线与 8 项响度指标（Integrated、LRA、"
+                "PLR、瞬时/短时最大值、真峰值），按文件缓存。本身不改动音频。",
+        "category": "响度", "icon": "gain",
+        "params": [
+            {"key": "force", "label": "强制重算", "type": "bool", "default": False,
+             "desc": "默认命中缓存就直接返回。源文件被外部工具改过、但大小与时间戳"
+                     "都没变时，开启它才会真的重新解码。"},
+        ],
+        "preview": "ffmpeg -i <文件> -map 0:a:0 -af "
+                   "ebur128=peak=true:framelog=verbose:metadata=true,"
+                   "ametadata=mode=print:file=ebur.txt -f null -   # 再解析 ebur.txt",
+    },
+    "loudness-image": {
+        "task": "loudness",
+        "label": "导出响度分析图",
+        "desc": "把响度总览图渲染成一张 **PNG**（双色包络 + 左右轴 + 时间刻度 + "
+                "底部 8 项指标），放在 outputs/loudness/。"
+                "纵轴是**非线性**的分段映射（有效响度区被放大），与参考图一致。",
+        "category": "响度", "icon": "gain",
+        "params": [
+            {"key": "width", "label": "宽度", "type": "int", "default": 2400,
+             "min": 800, "max": 8000,
+             "desc": "输出图片的像素宽度，整图约 6.6:1。按同一套比例重新排版"
+                     "（不是拉伸位图），所以放大更清晰、缩小也不糊。"},
+            {"key": "refLufs", "label": "参考线响度", "type": "float", "default": -23,
+             "min": -54, "max": -5,
+             "desc": "那条橙色参考线画在哪个响度上。EBU R128 是 -23，"
+                     "流媒体常用 -14，有声书 -18。"},
+            {"key": "highLufs", "label": "红带下界", "type": "float", "default": "",
+             "min": -54, "max": -5,
+             "desc": "高于此响度的段落用红带叠加。**留空 = 自动**"
+                     "（取 Integrated + LRA/2，即响度范围的上半段）—— "
+                     "原图那条红带的口径是反推的，这里给一个能从数据推出来的含义，"
+                     "想按听感调就直接填数值。"},
+            {"key": "force", "label": "强制重算", "type": "bool", "default": False,
+             "desc": "同上：跳过缓存重新分析。"},
+        ],
+        "preview": "ffmpeg -i <文件> -map 0:a:0 -af "
+                   "ebur128=peak=true:framelog=verbose -f null -   # 取时间线"
+                   "；再由后端按 axis_y 分段控制点用 PIL 画成 PNG",
+    },
+    "loudness-report": {
+        "task": "loudness",
+        "label": "响度分析报告",
+        "desc": "把响度分析写成一份 **Markdown 报告**（汇总表 + 逐曲 8 项指标 + "
+                "响度分区统计 + 最响/最轻的时间点），放在 outputs/loudness/。"
+                "适合归档、交付说明，或贴进 issue 复现问题。",
+        "category": "响度", "icon": "tag",
+        "params": [
+            {"key": "detail", "label": "详细程度", "type": "enum", "default": "summary",
+             "desc": "summary 只给汇总与分区；full 另附逐曲的指标明细与时间点。",
+             "options": [{"value": "summary", "label": "汇总（推荐）"},
+                         {"value": "full", "label": "完整（逐曲明细）"}]},
+            {"key": "timePoints", "label": "最响/最轻时间点个数", "type": "int",
+             "default": 5, "min": 0, "max": 30,
+             "desc": "每首歌各列几个最响与最轻的时间点（0 = 不列）。"
+                     "用来快速定位哪里爆了、哪里太安静。"},
+            {"key": "frameTable", "label": "附逐帧明细表", "type": "bool", "default": False,
+             "desc": "把 10Hz 的逐帧 M/S 也写成表格。默认关：3 分钟的歌约 1800 行，"
+                     "会把结论淹掉。"},
+            {"key": "refLufs", "label": "参考目标响度", "type": "float", "default": -23,
+             "min": -54, "max": -5,
+             "desc": "报告里用来判偏响/偏轻的参考线。EBU R128 是 -23，"
+                     "流媒体 -14，有声书 -18。"},
+            {"key": "force", "label": "强制重算", "type": "bool", "default": False,
+             "desc": "同上：跳过缓存重新分析。"},
+        ],
+        "preview": "（读响度缓存 → 渲染成 Markdown 落 outputs/loudness/）",
     },
 }
 
 # 参数类型 → 给前端表单用的控件
 PARAM_TYPES = ("enum", "int", "float", "bool", "text", "tags")
+
+
+# ---------------------------------------------------------------- 合并"接触面"
+#
+# `contract.py` 里那份接触面（touch/mode/obs/produce/needs/gives/consumes）
+# **必须出现在 `/api/ops` 里**，否则前端算不出"下一步能选什么卡"（方案 §3.2.4），
+# 只好自己再写一份判据 —— 两份判据迟早分叉，而分叉的表现是"卡片灰得莫名其妙"。
+#
+# 合并放在这里（而不是让 contract.py 反过来 import specs）的原因：
+# 依赖方向必须是 specs → contract 单向，contract 内部再 import specs 就成环了。
+# 测试 tests/boundary_check.py 会核对"每个 op 都登记了接触面"，漏登记直接红。
+def _merge_contract() -> None:
+    from backend.cards.contract import CONTRACT
+
+    for op, spec in OPS.items():
+        c = CONTRACT.get(op)
+        if not c:
+            continue
+        spec["touch"] = list(c["touch"])
+        spec["mode"] = c["mode"]
+        spec["obs"] = c["obs"]
+        spec["produce"] = c["produce"]
+        spec["needs"] = list(c["needs"]) if not isinstance(c["needs"], str) else [c["needs"]]
+        spec["gives"] = c["gives"]
+        spec["consumes"] = bool(c.get("consumes", True))
+        # `gives_formats` 也要送出去：前端要自己算串行档的"有损→无损"规则
+        # （见 app.js 的 `formatFlowBlocked`）。不送的话前端只能再抄一份规则表，
+        # 而"两份规则表各自漂移"是这个项目反复踩过的坑。
+        spec["gives_formats"] = c.get("gives_formats") or "none"
+
+
+_merge_contract()
+
+
+# ---------------------------------------------------------------- 任务分发键 `_op`
+#
+# **一个任务类型被多个 op 共用时，handler 只有拿到 `params["_op"]` 才知道自己
+# 该做哪一件。** 目前只有响度三兄弟是这样：`loudness` / `loudness-image` /
+# `loudness-report` 共用任务类型 `loudness`（任务类型与卡片 op 是两套命名，
+# 靠上面每个 spec 的 `task` 字段桥接），分流在 `tasks.h_loudness` 里读这个键。
+#
+# 所以判据**从上面那张表现算**，不写死名单 —— 写死的话，将来再加一个共用
+# 任务类型的 op，同一个坑会原样重演。
+#
+# ⚠ 这个键**必须由服务端在建任务时注入**，而且**两条建任务的路径都要走这里**：
+#   ① 路由路径 `routers/ops.py` 的 `submit_batch`（单步提交、右键菜单）
+#   ② 建链路径 `chain.build_chain`（执行链，前端主路径）
+# 曾经只有 ① 注入了，于是链上的「响度分析报告」退化成"只算一遍响度写缓存"，
+# 任务状态还是 `success` —— 用户看到的是"成功但什么都没产出"，
+# 界面不报错、库里没产物，极难查（钉子见 tests/chain_build_check.py §6c 与
+# tests/loudness_chain_e2e_check.py）。
+def _task_of(op: str) -> str:
+    """op → 它实际使用的任务类型（未知 op 时原样返回，不猜）。"""
+    spec = OPS.get(op) or {}
+    return str(spec.get("task") or op)
+
+
+def _shared_task_ops() -> frozenset[str]:
+    """与别的 op 共用同一个任务类型的 op —— 这些**必须**带上 `_op`。"""
+    counts = Counter(_task_of(op) for op in OPS)
+    return frozenset(op for op in OPS if counts[_task_of(op)] > 1)
+
+
+SHARED_TASK_OPS = _shared_task_ops()
+
+
+def task_params(op: str, params: dict | None = None) -> dict:
+    """把某个 op 的 params 规范成**任务**的 params（建任务前必须过这一道）。
+
+    规则只有两条：
+
+      · `_op` 是**服务端状态**，客户端传什么都要丢掉（否则谁都能让
+        `loudness` 这个卡片去写报告文件）；
+      · 共用任务类型的 op 家族，把 op 自己写进 `_op` —— handler 靠它分流。
+    """
+    p = dict(params or {})
+    p.pop("_op", None)                      # 不许客户端伪造服务端状态
+    if op in SHARED_TASK_OPS:
+        p["_op"] = op
+    return p
 

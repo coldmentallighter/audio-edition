@@ -38,6 +38,15 @@
   <div class="chainbar">
     <span class="chainbar__label">执行链</span>
     <div class="chain" id="chain"><!-- app.js --></div>
+    <!-- 链上"能跑但接不上"的提示（并行档才出现）+ 一键改成串行 -->
+    <div class="chain__notes" id="chainNotes" hidden><!-- app.js --></div>
+    <!-- 执行链模式：串行 / 并行（方案 §3.1.2，只有两档） -->
+    <div class="switchgroup" id="chainMode" role="group" aria-label="执行链模式" hidden>
+      <button class="seg" data-mode="serial" aria-pressed="false"
+              title="每个文件按链序走完，每一步处理上一步的结果（含改过的标签/文件名）；文件之间并行">串行</button>
+      <button class="seg" data-mode="parallel" aria-pressed="true"
+              title="各步互不相干，一次全部提交（最快，但步骤之间不会传递产物）">并行</button>
+    </div>
     <div class="chainbar__acts">
       <button class="btn btn--xs btn--run" id="chainRun"
               title="按顺序执行整条链，作用于已勾选的文件">
@@ -46,8 +55,14 @@
         </svg>
         执行链
       </button>
-      <button class="btn btn--xs" id="chainSave">保存预设</button>
-      <button class="btn btn--xs btn--ghost" id="chainExport">导出脚本</button>
+      <!-- 「保存预设」：**已实现**（方案 §3.8.2）。点它弹命名对话框，
+            落 `cards.json` 的 `presets`，在抽屉的「预设链路」视图里能看到。
+            之前它弹"已保存为预设"却什么都没存（chain.join() 只是拼了个字符串），
+            属于对用户说谎 —— P0-0 先把它置灰，现在做成真的。
+            「导出脚本」已按决策删除：它与保存预设互斥（一个带走、一个留下），
+            且导出只能是近似（输出路径规则无法完全等价），不值得维护两份表达。 -->
+      <button class="btn btn--xs" id="chainSave"
+              title="把当前执行链存成预设（含档位与每一步的参数）">保存预设</button>
     </div>
 
     <!-- 试听音量：控制顶部共用的 <audio id="player"> -->
@@ -187,15 +202,27 @@
 
       <div class="drawer__viewport" id="cardViewport">
         <div class="drawer__head">
-          <h2 class="drawer__title">功能卡片</h2>
+          <!-- 标题本身是「功能卡片 ⇄ 预设链路」的切换按钮（方案 §3.8.2 四）。
+               用 <button> 而不是 <h2 onclick>：键盘可达、读屏可读，
+               `aria-pressed` 跟着切。标签文字也要换 —— 只改 title 的话
+               屏幕阅读器读到的还是「功能卡片」。 -->
+          <button class="drawer__title drawer__title--btn" id="drawerTab"
+                  type="button" aria-pressed="false"
+                  title="点击切换到预设链路">
+            <span id="drawerTabLabel">功能卡片</span>
+            <span class="drawer__title-arrow" aria-hidden="true"></span>
+          </button>
           <span class="drawer__scope" id="drawerScope">未选中文件</span>
-          <!-- 新增：全部展开/收起 -->
+          <!-- 新增：全部展开/收起（预设视图里隐藏：预设不分段，没有可收的） -->
           <button class="btn btn--ghost btn--xs" id="cardsecToggleAll" type="button">全部收起</button>
           <button class="btn btn--ghost btn--xs" id="drawerClose">收起</button>
         </div>
 
         <!-- 卡片分组容器：由 app.js 渲染，每个 .cardsec 都支持折叠 -->
         <div class="drawer__cards" id="cardSections"><!-- app.js --></div>
+        <!-- 预设链路：与 #cardSections 互斥显示，**共用同一个滚动容器**
+             （#cardViewport），不新开一层滚动区（方案 §3.8.2 四） -->
+        <div class="drawer__cards" id="presetSections" hidden><!-- app.js --></div>
       </div>
 
       <!-- 搜索固定在窗口最底部：点击唤出，带缓出动画 -->
@@ -231,6 +258,9 @@
     <strong id="noticeTitle">提示</strong>
     <span id="noticeMsg"></span>
   </div>
+  <!-- 可选的动作按钮（如「查看详情」→ 打开执行链编辑器，§9.1.2 一）。
+       默认隐藏：`showNotice` 没给动作时它不出现，免得出现一个点了没事的按钮。 -->
+  <button class="btn btn--xs" id="noticeAct" hidden></button>
   <button class="btn btn--ghost btn--xs" id="noticeClose" aria-label="关闭">关闭</button>
 </div>
 
@@ -248,9 +278,76 @@
   </div>
 </div>
 
-<!-- ============================ 卡片编辑器 ============================ -->
-<div class="modal" id="cardModal" hidden>
+<!-- ==================== 保存为预设 / 编辑预设（方案 §3.8.2 一） ==================== -->
+<!-- 两个用途共用这一个盒子：`#presetModal` 的字段按用途切换（保存 vs 重命名），
+     标题与按钮文字跟着换。为什么共用：两个对话框的字段**完全一样**
+     （名称 / 图标 / 描述），各自维护一份必然漂移（§3.8.2 三的图标选择器也在这里）。 -->
+<div class="modal" id="presetModal" hidden>
   <div class="modal__scrim" data-close></div>
+  <div class="modal__box" role="dialog" aria-modal="true"
+       aria-labelledby="presetModalTitle">
+    <h2 class="modal__title" id="presetModalTitle">保存为预设</h2>
+    <p class="modal__sub" id="presetModalSub">—</p>
+
+    <div class="modal__form">
+      <label class="field">
+        <span>名称</span>
+        <input class="input" id="presetName" type="text" maxlength="40"
+               placeholder="预设_01" autocomplete="off">
+      </label>
+
+      <div class="field">
+        <span>图标</span>
+        <!-- `.iconpick` 的基础样式在 editor.css（卡片编辑器那个同名容器共用一份）；
+             这里加 `--preset` 只是为了"预设是多选 + 有自动态"那点差异。
+             **别再写一条裸 `.iconpick`** —— 那会和 editor.css 那条互相污染。 -->
+        <div class="iconpick iconpick--preset" id="presetIcons"
+             role="radiogroup" aria-label="预设图标（可多选）"><!-- app.js --></div>
+        <div class="iconpick__acts">
+          <button class="btn btn--ghost btn--xs" id="presetIconsAuto"
+                  type="button">恢复自动</button>
+          <button class="btn btn--ghost btn--xs" id="presetIconsAll"
+                  type="button">全部图标</button>
+        </div>
+      </div>
+
+      <label class="field">
+        <span>描述</span>
+        <input class="input" id="presetDesc" type="text" maxlength="120"
+               placeholder="例如：专辑归档：转 FLAC → 标准化 -16" autocomplete="off">
+      </label>
+
+      <!-- 档位**只读展示、不在这里改**：档位是顶栏开关的职责（§3.7）。
+           显示它是为了让用户存之前就知道"我存的是串行还是并行"。 -->
+      <p class="preset__meta" id="presetMeta">—</p>
+      <!-- 导出未知卡片时，把"将要给别人什么"列清楚（§9.1.2 二 A） -->
+      <div class="preset__list" id="presetList" hidden></div>
+    </div>
+
+    <div class="modal__acts">
+      <button class="btn btn--ghost" data-close>取消</button>
+      <button class="btn btn--primary" id="presetSave">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== 编辑执行链（预设的 steps，方案 §9.1.2 二 B） ==================== -->
+<div class="modal" id="chainEditModal" hidden>
+  <div class="modal__scrim" data-close></div>
+  <div class="modal__box modal__box--wide" role="dialog" aria-modal="true"
+       aria-labelledby="chainEditTitle">
+    <h2 class="modal__title" id="chainEditTitle">编辑执行链</h2>
+    <p class="modal__sub" id="chainEditSub">—</p>
+    <div class="chainedit" id="chainEditList"><!-- app.js --></div>
+    <div class="modal__acts">
+      <button class="btn btn--ghost" data-close>取消</button>
+      <button class="btn btn--primary" id="chainEditSave">保存这条链</button>
+    </div>
+  </div>
+</div>
+
+<!-- ============================ 卡片编辑器 ============================ -->
+<div class="modal" id="cardModal" hidden>  <div class="modal__scrim" data-close></div>
   <div class="modal__box modal__box--wide" role="dialog" aria-modal="true"
        aria-labelledby="cardModalTitle">
     <h2 class="modal__title" id="cardModalTitle">编辑卡片</h2>

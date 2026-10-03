@@ -48,15 +48,31 @@ const API = (() => {
     cancelTask:  (id) => j('POST', `/api/tasks/${id}/cancel`),
     retryTask:   (id) => j('POST', `/api/tasks/${id}/retry`),
     op:          (name, payload) => j('POST', `/api/ops/${name}`, payload),
+    // 执行链：一次提交整条链（方案 §3.2）。原来前端是"每步一次 API.op"，
+    // 那样 await 的只是"任务建好了"，步骤之间没有任何屏障 —— 所以链接不起来。
+    chain:       (payload) => j('POST', '/api/ops/chain', payload),
+    chainState:  (chainId) => j('GET', `/api/chains/${chainId}`),
     ops:         () => j('GET', '/api/ops'),
     previewCard: (op, params) =>
                    j('GET', `/api/cards/ops/${op}/preview?params=${encodeURIComponent(JSON.stringify(params || {}))}`),
     createCard:  (card) => j('POST', '/api/cards', card),
     updateCard:  (id, card) => j('PUT', `/api/cards/${id}`, card),
     deleteCard:  (id) => j('DELETE', `/api/cards/${id}`),
+    // 卡片的导入/导出（后端一直有，前端以前没接线）。§9.1.2 二 A 的
+    // "导出我没有的功能卡片"与"注册为卡片"都走这两个 —— 不新造格式。
+    exportCards: () => j('GET', '/api/cards/export'),
+    importCards: (payload) => j('POST', '/api/cards/import', payload),
     snapshots:   () => j('GET', '/api/snapshots'),
     putSnapshots: (names) => j('PUT', '/api/snapshots', { snapshots: names }),
     resetSnapshots: () => j('DELETE', '/api/snapshots'),
+    // 预设（§3.8.2）。三个端点与 snapshots 同形，接线照抄。
+    // `GET` 顺带返回 `nextName`（`预设_NN` 的 max+1 由**后端**算，
+    // 前端算就要把那套"不复用空洞"的规则再写一遍，两处漂移会存出重名）。
+    presets:     () => j('GET', '/api/presets'),
+    createPreset: (p) => j('POST', '/api/presets', p),
+    updatePreset: (id, patch) => j('PUT', `/api/presets/${id}`, patch),
+    deletePreset: (id) => j('DELETE', `/api/presets/${id}`),
+    resetPresets: () => j('DELETE', '/api/presets'),
     // 任务结果里的 output 是相对项目根的（outputs/waveforms/x.png），
     // 而 /api/outputs/ 收的是相对 outputs/ 的路径 —— 这里统一剥掉前缀
     outputUrl:   (rel, inline = true) => {

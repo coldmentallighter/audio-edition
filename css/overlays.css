@@ -320,7 +320,7 @@ html:not([data-fx="off"]) .modal__title {
   transition: translate .12s ease-out;
   text-shadow:1px 1px 5px  color-mix(in srgb, var(--fill-primary) 30%,#aaaa );
 }
-html:not([data-fx="off"]) .btn--primary{
+html:not([data-fx="off"]) .modal__acts > .btn--primary{
   translate: calc(var(--nx, 0) * 2px + 2px) calc(var(--ny, 0) * 1px + 3px);
   transition: translate .12s ease-out;
   box-shadow: -1px -1px 5px  color-mix(in srgb, var(--fill-primary) 30%,#aaaa );
@@ -329,7 +329,7 @@ html:not([data-fx="off"]) .modal__sub{
   translate: calc(var(--nx, 0) * 1px - 1px) calc(var(--ny, 0) * .5px - 1.5px);
   transition: translate .12s ease-out;
 }
-html:not([data-fx="off"]) .btn--ghost{
+html:not([data-fx="off"]) .modal__acts > .btn--ghost{
   translate: calc(var(--nx, 0) * 1px + 1px) calc(var(--ny, 0) * .5px + 1.5px);
   transition: translate .12s ease-out;
 }

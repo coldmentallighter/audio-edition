@@ -104,7 +104,12 @@ class Toolchain:
 
         import tempfile
 
-        with tempfile.TemporaryDirectory(prefix="ae-probe-") as td:
+        # ignore_cleanup_errors：临时目录**删不掉**不该拖垮启动。
+        # 实测在受限环境（Windows 沙箱 / 杀软锁文件）下，TemporaryDirectory.__exit__
+        # 里的 rmtree 会抛 PermissionError，而这个异常是在 lifespan 里冒出来的 ——
+        # 结果是"探一下 metaflac"导致整个服务起不来，用户只看到一句拒绝访问。
+        # 探测的目的是"确认工具可用"，与"临时文件清理成功"无关，所以清理失败就放着。
+        with tempfile.TemporaryDirectory(prefix="ae-probe-", ignore_cleanup_errors=True) as td:
             f = Path(td) / "probe.flac"
             code, _, _ = _run([
                 ff, "-hide_banner", "-loglevel", "error", "-y",

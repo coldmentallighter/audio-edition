@@ -30,10 +30,60 @@ IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024 * 1024      # 单文件 4GB
 MAX_BATCH_FILES = 500                           # 单次批量上限
+# 一条执行链最多几步。12 个内置 op 排两轮都用不到 20，
+# 给 32 是"够用且能挡住手滑/脚本灌进来的畸形链"。
+MAX_CHAIN_STEPS = 32
 
 # 任务
-MAX_CONCURRENCY = 2                             # 并发数上限（需求：不阻塞 WebUI）
+#
+# **并发数上限**（需求：不阻塞 WebUI）。可用 `AE_CONCURRENCY` 覆盖：
+# 文件级流水线的收益与 slot 数正相关（一个任务只等**它自己那个文件**的上一步，
+# 所以 slot 越多、能同时推进的文件越多），值得让人按机器调。
+#
+# 上限 16 是**故意压住**的：这不是"越高越好"的旋钮 —— 每个 slot 都可能起一个
+# ffmpeg 进程，8 个 slot 同时转码就能把一台普通机器打满，然后**整机**（含 WebUI）
+# 一起卡，而那正是这条需求要防的事。真要跑极限请改代码，别指望一个环境变量。
+MAX_CONCURRENCY = max(1, min(16, int(os.environ.get("AE_CONCURRENCY", "2") or 2)))
 TASK_TIMEOUT = 60 * 60                          # 单任务超时 1 小时
+
+# 长任务**最多占几个 worker**（`0` = 不限制）。
+#
+# 为什么需要：`normalize`（loudnorm 两遍法）与 `zip` 这类任务一跑就是几十秒到十几
+# 分钟。默认 2 个 slot 时，两个长任务一起上就把队列占满 —— 期间**短任务全部排队**，
+# 界面看着像卡死（进度条不动、点什么都要等）。留一个 slot 给短任务，页面就一直是
+# "有反应"的：短任务穿插跑完，长任务用剩下的槽位慢慢推。
+#
+# 默认值是 `max(1, 并发数 - 1)`，但**要在 `Queue` 里按实际 worker 数算**，
+# 不能在这里按 `MAX_CONCURRENCY` 烤死 —— 测试会 `Queue(workers=4)`，
+# 烤死的话它只拿到 1 个长任务槽（本该 3 个），而"限制生效了"这件事
+# 看起来完全正常，只有对比并发数才发现不对。
+# 所以这里只在**显式设了 `AE_LONG_SLOTS`** 时给一个数，否则是 `None`
+# （= "按 n-1 推导"）：
+#   · 并发 2 → 长任务最多 1 个（留 1 个给短任务）
+#   · 并发 1 → 限制自动失效（只有 1 个 slot，"留一个"等于不让长任务跑，
+#     那是死锁级错误）
+#   · 设 0 → 关掉这条限制
+_LONG_SLOTS_RAW = os.environ.get("AE_LONG_SLOTS")
+LONG_TASK_SLOTS: int | None
+if _LONG_SLOTS_RAW is None or str(_LONG_SLOTS_RAW).strip() == "":
+    LONG_TASK_SLOTS = None                     # → `Queue` 按 `max(1, n-1)` 算
+else:
+    try:
+        LONG_TASK_SLOTS = max(0, int(_LONG_SLOTS_RAW))
+    except ValueError:
+        LONG_TASK_SLOTS = None
+
+# "长任务"的判定：按**任务类型**列出来，不猜时长 ——
+# 时长要在跑的过程中才知道，而准入必须在**开始之前**做决定。
+# 名单来源（都是"要完整读一遍文件"的量级）：
+#   · `normalize` —— loudnorm 两遍法 = 完整解码两趟
+#   · `waveform`  —— 整曲解码画波形
+#   · `loudness`  —— 整曲 ebur128（三个响度 op 共用这个类型）
+#   · `zip`       —— 等全批 + 压缩，可能几十个文件
+#   · `verify`    —— 整曲重新解码算校验值
+# 不在名单里的（`convert` / `tags` / `cover` / `probe` / `peaks` …）都能在
+# 秒级跑完，本来就该优先占槽 —— 把短任务也限住就失去意义了。
+LONG_TASK_TYPES = frozenset({"normalize", "zip", "waveform", "loudness", "verify"})
 
 HOST = os.environ.get("AE_HOST", "127.0.0.1")
 PORT = int(os.environ.get("AE_PORT", "8765"))
@@ -198,6 +248,12 @@ class ServerInfo:
             "maxUploadBytes": MAX_UPLOAD_BYTES,
             "maxBatchFiles": MAX_BATCH_FILES,
             "maxConcurrency": MAX_CONCURRENCY,
+            # 长任务槽位（§3.5）。`0` = 不限制；`None` 在这里已经解析成具体数字，
+            # 让前端/探针读到的就是**实际生效**的值，而不是"看情况"。
+            "longTaskSlots": (LONG_TASK_SLOTS if LONG_TASK_SLOTS is not None
+                              else max(0, MAX_CONCURRENCY - 1)
+                              if MAX_CONCURRENCY > 1 else 0),
+            "longTaskTypes": sorted(LONG_TASK_TYPES),
             "freshOnStart": FRESH_ON_START,
             "audioExt": sorted(AUDIO_EXT),
             "imageExt": sorted(IMAGE_EXT),

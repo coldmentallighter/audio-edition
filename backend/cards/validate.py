@@ -94,8 +94,17 @@ def _check_value(spec: dict, value: Any) -> Any:
     return s
 
 
-def validate_card(card: dict, *, existing_ids: set[str] | None = None) -> dict:
-    """校验并规范化一张卡片，返回干净的可存储对象。"""
+def validate_card(card: dict, *, existing_ids: set[str] | None = None,
+                  taken_names: set[str] | None = None,
+                  builtin_names: set[str] = frozenset()) -> dict:
+    """校验并规范化一张卡片，返回干净的可存储对象。
+
+    `taken_names` 是**库里已经用掉的名字**（内置 + 自定义），由 `cards.store`
+    算好传进来（它才知道自己那一份 `cards.json` 里有什么）；`builtin_names`
+    只是为了让报错能说清"撞的是内置卡还是自定义卡"。两者缺省都不查重名 ——
+    `validate_card` 也用在"只看单张卡合不合法"的场景（导入预检、冒烟测试），
+    那些地方没有库上下文。
+    """
     if not isinstance(card, dict):
         raise ValueError("卡片必须是对象")
 
@@ -104,6 +113,21 @@ def validate_card(card: dict, *, existing_ids: set[str] | None = None) -> dict:
         raise ValueError("卡片名称不能为空")
     if len(name) > 40:
         raise ValueError("卡片名称最长 40 字")
+
+    # 卡片名必须**全局唯一**（内置 + 自定义）。
+    #
+    # 这个看着像"体验"问题，其实是硬约束：卡片库整套 UI 是**按名字**认卡的
+    # （`cardHTML` 发的是 `data-card="${c.name}"`、`CARDS.find(c => c.name === …)`、
+    # 快照条存的也是名字）。于是与内置卡同名的自定义卡在 `find` 里永远输给排在前面的
+    # 内置卡（`all_cards()` = builtin + custom）—— 用户看到的是"我新建的卡被识别成
+    # 内置卡"，点开只有「查看 / 另存为…」，既改不了也删不掉（实测）。
+    # 更隐蔽的是同一个名字在不同代码路径解析到**不同的卡**：`find` 取第一个，
+    # 而 `applyServerCards` 里 `new Map(CARDS.map(c => [c.name, c]))` 同名时后者覆盖前者。
+    if taken_names and name in taken_names:
+        kind = "内置卡片" if name in builtin_names else "自定义卡片"
+        raise ValueError(
+            f"已经有一张叫「{name}」的{kind}了，卡片名不能重复 —— "
+            f"卡片库是按名字找卡的，重名会让其中一张点不开。请换个名字。")
 
     op = str(card.get("op") or "").strip()
     if op not in OPS:
@@ -136,7 +160,16 @@ def validate_card(card: dict, *, existing_ids: set[str] | None = None) -> dict:
         if not _applies(spec, raw_params):
             continue
         if key in raw_params:
-            params[key] = _check_value(spec, raw_params[key])
+            value = raw_params[key]
+            # **空字符串 = 未设置**。数值/枚举型参数允许"留空 = 自动"
+            # （`loudness-image.highLufs` 就是：留空取 Integrated + LRA/2），
+            # 而前端会把空串原样回传 —— 不特判就会被 `float("")` 判成
+            # "必须是数字"而报错，用户看到的是一条莫名其妙的校验失败。
+            # `text` 型不受影响（空文本是合法值）；`bool` 的 `""` 有意义（= False）。
+            if (isinstance(value, str) and not value.strip()
+                    and spec["type"] in ("int", "float", "enum")):
+                continue
+            params[key] = _check_value(spec, value)
         elif "default" in spec:
             params[key] = spec["default"]
     # 必填但没给值的，让这里统一报错
@@ -164,6 +197,96 @@ def validate_card(card: dict, *, existing_ids: set[str] | None = None) -> dict:
     if note:
         out["note"] = note
     return out
+
+
+# ---------------------------------------------------------------- 执行链步骤
+
+def validate_step(raw: Any, *, idx: int = 0) -> dict:
+    """校验并规范化**执行链上的一步**，返回干净的可存储对象。
+
+    与 `validate_card` 的关键区别：**这里不碰卡片名唯一性，也不生成卡片 id**。
+    链上的步骤是"一张卡的**快照**"（§9.1.1 二）—— 卡片可以被改名、被删，
+    而这一步必须照旧能跑，所以它自包含 `op` + `params`。
+
+    `name` **允许指向已不存在的卡片**（预设跨机器、或用户删过卡），
+    这正是"快照"存在的意义，所以这里不校验它。
+    """
+    if not isinstance(raw, dict):
+        raise ValueError("每一步必须是一个对象")
+
+    op = str(raw.get("op") or "").strip()
+    if op not in OPS:
+        raise ValueError(f"未知的操作：{op!r}")
+
+    spec = OPS[op]
+    raw_params = raw.get("params")
+    if raw_params is None:
+        raw_params = {}
+    if not isinstance(raw_params, dict):
+        raise ValueError("params 必须是对象")
+
+    specs = {p["key"]: p for p in spec["params"]}
+    # 允许 `_` 开头的服务端内部键留在快照里吗？**不允许** —— 它们是路由注入的
+    # （`routers/ops.py` 的 `_op`），留在预设里等于让用户能伪造服务端状态。
+    unknown = [k for k in raw_params if k not in specs and not str(k).startswith("_")]
+    if unknown:
+        raise ValueError(f"「{spec['label']}」不认识这些参数：{', '.join(unknown)}")
+
+    params: dict[str, Any] = {}
+    for key, pspec in specs.items():
+        if not _applies(pspec, raw_params):
+            continue
+        if key in raw_params:
+            params[key] = _check_value(pspec, raw_params[key])
+        elif "default" in pspec:
+            params[key] = pspec["default"]
+    for key, pspec in specs.items():
+        if not _applies(pspec, params):
+            continue
+        if pspec.get("required") and not str(params.get(key) or "").strip():
+            raise ValueError(f"「{pspec['label']}」是必填项")
+
+    out: dict[str, Any] = {
+        "name": str(raw.get("name") or spec["label"]).strip()[:60],
+        "op": op,
+        "params": params,
+        # `ico` 进快照：卡片删了之后链上还要显示图标（§9.1.1 二）
+        "ico": str(raw.get("ico") or spec["icon"]).strip()[:32],
+    }
+    # `cardId` / `custom` 决定"这一步是不是来自一张不在库里的卡"（§9.1.2 一），
+    # 所以要保留；缺省按内置卡处理（内置卡永远在库里）。
+    cid = str(raw.get("cardId") or "").strip()
+    if cid:
+        out["cardId"] = cid
+    if raw.get("custom"):
+        out["custom"] = True
+    return out
+
+
+def validate_steps(raw: Any, *, where: str = "") -> tuple[list[dict], list[str]]:
+    """校验一串步骤 → `(干净的步骤, 逐条原因)`。
+
+    **非法项不静默吞掉**（§3.8.2 七）：每一条失败都带上"第几步、哪张卡、为什么"，
+    调用方据此决定是拒绝保存（保存路径）还是跳过该项（还原路径）。
+    """
+    if not isinstance(raw, list):
+        raise ValueError("steps 必须是数组")
+    if not raw:
+        raise ValueError("执行链是空的，没有可保存的步骤")
+    good: list[dict] = []
+    why: list[str] = []
+    for i, item in enumerate(raw):
+        try:
+            good.append(validate_step(item, idx=i))
+        except ValueError as e:
+            label = ""
+            if isinstance(item, dict):
+                label = str(item.get("name") or item.get("op") or "").strip()
+            head = f"{where} 的第 {i + 1} 步" if where else f"第 {i + 1} 步"
+            if label:
+                head += f"「{label}」"
+            why.append(f"{head}参数非法：{e}（该项已跳过）")
+    return good, why
 
 
 def render_preview(op: str, params: dict) -> str:

@@ -50,6 +50,36 @@
 .chainbar .chain__item { white-space: nowrap; }
 .chainbar__acts { flex: 0 0 auto; display: flex; gap: 6px; }
 
+/* ---------------- 执行链模式开关（串行 / 并行） ----------------
+   「串行 / 并行」这两个词本身说明不了差别，真正的差别是"接不接得上"，
+   所以 title 里写清楚了；这里只保证它够窄、不把顶栏撑开。 */
+#chainMode { flex: 0 0 auto; }
+#chainMode .seg { padding: 3px 9px; font-size: 11.5px; }
+
+/* ---------------- 链上的"接不上"提示 ----------------
+   只提示、不阻断：这些组合跑得起来，只是结果可能不是用户以为的那样。
+   放在链的下一行，避免把顶栏高度撑高（顶栏只有 --header-h）。 */
+.chainbar { position: relative; }
+.chain__notes {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  max-width: min(680px, 70vw);
+  padding: 7px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+}
+.chain__note {
+  font-size: 11.5px;
+  color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 460px;
+}
+
 /* 执行链按钮：链为空或无选中文件时禁用 */
 .btn--run { display: inline-flex; align-items: center; gap: 5px; }
 .btn--run svg { width: 13px; height: 13px; }
