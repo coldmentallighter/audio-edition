@@ -363,3 +363,18 @@ html:not([data-fx="off"]) .modal__acts > .btn--ghost{
   border-radius: 999px;
 }
 
+/* ────────────── 弹入收尾强调动画 ──────────────*/
+@keyframes modal-flash {
+  0%, 100% { opacity: 1; }
+  45%      { opacity: .3; }
+}
+
+.modal.is-open .modal__title,
+.modal.is-open .modal__acts > .btn {
+  animation: modal-flash 80ms ease-in-out 50ms 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal.is-open .modal__title,
+  .modal.is-open .modal__acts > .btn { animation: none; }
+}
