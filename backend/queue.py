@@ -91,6 +91,11 @@ def _produces_derived(task_type: str) -> bool:
     """这个任务类型会不会产出"下一步要吃的那个新文件"（`produce='derived'`）。
 
     用接触面表反查，而不是写死任务类型名 —— 加 op 时不用改这里。
+
+    ⚠ 只按**任务类型**反查，所以对"共用任务类型的家族"它回答的是
+    "第一个登记的那个 op"的答案（响度三兄弟 → `loudness` → `none`）。
+    它只用于**屏障的宽限期**（"成功但产物还没交付"要不要再等一下），
+    而那个判断宁可保守；真正决定"要不要交接"的是 `_handoff_kind`（按 op 判）。
     """
     from backend.cards.contract import CONTRACT, produces
     from backend.cards.specs import OPS
@@ -99,6 +104,20 @@ def _produces_derived(task_type: str) -> bool:
         if str(spec.get("task") or op) == task_type and op in CONTRACT:
             return produces(op) == "derived"
     return False
+
+
+def _handoff_kind(task: store.TaskRow) -> str:
+    """这条任务的产物属于哪一类（`contract.produces`）—— 决定要不要交接给下一步。
+
+    **必须按 op 判，不能只按任务类型判**：响度三兄弟共用任务类型 `loudness`，
+    按类型反查永远得到 `loudness`（`produce=none`），
+    于是 `loudness-report` / `loudness-image` 这两个**旁路**产物会被误交接。
+    """
+    from backend.cards import contract as _contract
+    from backend.cards.specs import op_of_task
+
+    op = op_of_task(task.type, task.params)
+    return _contract.produces(op) if op in _contract.CONTRACT else "none"
 
 
 class Queue:
@@ -291,51 +310,60 @@ class Queue:
         return False
 
     def _aggregate_barrier_unready(self, task: store.TaskRow) -> bool:
-        """汇总类任务（`打包 ZIP`）的**全局屏障**：它要等链上所有前置步骤落定。
+        """汇总类任务（`打包 ZIP`）的**全局屏障**：它要等**打包窗口内**的步骤全部落定。
 
-        ⚠ **为什么不能只看"库里已经有哪些前置任务"**（第一版就是这么错的）：
-        建链是"逐条 INSERT"，而任务**在全部建好之后才一起入队**……
-        看起来没问题，但 `zip` 完全可能在建链还没走到它自己那一步之前
-        就已经被 worker 取走（建链的 INSERT 与 worker 的 SELECT 是两条独立连接）。
-        那一刻"这个文件的前置任务"查出来是**空**，屏障于是认为"前面没东西，可以开跑"，
-        结果它在转换还没建出来时就把**源文件**装走了 —— 症状是
-        "ZIP 里是原文件而不是产物"，而且**偶发**（看谁先跑）。
+        窗口 = 「上一个打包步骤（不含）」→「本次打包步骤（不含）」
+        （`store.chain_zip_window`，与 `h_zip` 用的是**同一份**解算）。
 
-        所以判据必须用**建链时就写死的 `chain_steps`**（这条链一共几步）：
-          · `step_idx > 0` 但前置步骤在库里数不满 → 还没轮到它 → 等
-          · 前置步骤齐了但还有 pending/running → 等
+        ⚠ **为什么不能只看"紧邻的前一步"**（第一版就是这么写的）：
+        窗口可能跨多步。并行档下 `波形 → 探测 → 打包` 里 zip 只等"探测"，
+        而波形的 PNG 可能**还没生成** —— 于是包里静默少一个成员，
+        而且不报错（用户拿到一个"看起来成功"的包）。串行档虽然靠因果边
+        间接保证了顺序，但 `attach` 有 `ATTACH_GRACE` 时限，所以同样要判一遍。
 
-        这条也顺带说明为什么"约束要从数据里推、而不是从时序里猜"。
+        ⚠ **为什么不能只看"库里已经有哪些前置任务"**：建链是"逐条 INSERT"，
+        而任务**在全部建好之后才一起入队**……看起来没问题，但 `zip` 完全可能在
+        建链还没走到它自己那一步之前就被 worker 取走（建链的 INSERT 与 worker 的
+        SELECT 是两条独立连接）。那一刻"这个文件的前置任务"查出来是**空**，
+        屏障于是认为"前面没东西，可以开跑"，结果它在转换还没建出来时就把
+        **源文件**装走了 —— 症状是"ZIP 里是原文件而不是产物"，而且**偶发**。
+
+        判据必须来自**建链时就写死的 `chain_steps`** 与窗口本身，不猜时序。
         """
         if not (task.chain_id and task.step_idx is not None):
             return False
-        if task.step_idx == 0:
-            return False                    # 它自己是第一项 → 装源文件，无需等
+        win = store.chain_zip_window(task.chain_id, int(task.step_idx))
+        if not win["steps"]:
+            return False                    # 窗口是空的（打包自己是第一项）→ 装源文件
         now = time.time()
         anchor = store.chain_started_at(task.chain_id)
+        # 每个文件在每个窗口步骤上的状态：(file_id, step) → 状态
+        state_of = {(t["file_id"], t["step_idx"]): t for t in win["tasks"]}
+        file_steps: dict[str, list[int]] = {}
+        for t in win["tasks"]:
+            if t["file_id"]:
+                file_steps.setdefault(t["file_id"], []).append(t["step_idx"])
+
         for fid in (task.params.get("fileIds") or []):
-            state = store.file_prev_step_state(task.chain_id, fid, task.step_idx,
-                                               before_ts=anchor)
-            # ① 前置还在排队/在跑 → **无条件等**。
-            #    这一条与"建链进行中"无关；上一轮把它和 ② 混在一个 `if` 里、
-            #    用 `chain_build_in_progress` 一起短路，于是守卫一松就在这里放行，
-            #    症状正是"偶发：没有任何文件可以打包：X（第 1 步（convert）还在跑）"。
-            if state in ("pending", "running"):
-                return True
-            # ② 前置行**缺失** → 只在"建链可能还在插入"时等。
-            #    建链早就结束却仍然缺，说明那一步对这批文件没建任务，等也等不到。
-            #    排除自己：`_gate` 在 `start_task` 之前跑，**它自己此刻就是 pending**。
-            if state == "missing" and store.chain_build_in_progress(
-                    task.chain_id, exclude_task_id=task.id):
-                return True
-            # ③ 刚成功、产物还没交付 → 等一下那次回填（带时限：
-            #    "成功但本来就不产出文件"的步骤永远不会交付，不能无限等）
-            prev = store.tasks_before(task.chain_id, task.step_idx, fid,
-                                      before_ts=anchor)
-            for p in prev:
-                if (p.state == "success" and not p.src_output
-                        and _produces_derived(p.type)
-                        and (now - (p.ended_at or 0)) < ATTACH_GRACE):
+            for si, st in win["steps"].items():
+                if st["aggregate"]:
+                    continue                # 窗口内不会有别的打包步骤（窗口定义保证）
+                row = state_of.get((fid, si))
+                state = row["state"] if row else "missing"
+                # ① 前置还在排队/在跑 → **无条件等**
+                if state in ("pending", "running"):
+                    return True
+                # ② 前置行**缺失** → 只在"建链可能还在插入"时等。
+                #    建链早就结束却仍然缺，说明那一步对这批文件没建任务，等也等不到。
+                #    排除自己：`_gate` 在 `start_task` 之前跑，**它自己此刻就是 pending**。
+                if state == "missing" and store.chain_build_in_progress(
+                        task.chain_id, exclude_task_id=task.id):
+                    return True
+                # ③ 刚成功、产物还没交付 → 等一下那次回填（带时限：
+                #    "成功但本来就不产出文件"的步骤永远不会交付，不能无限等）
+                if (row and row["state"] == "success" and not row["src_output"]
+                        and _produces_derived(row["type"])
+                        and (now - (row["ended_at"] or 0)) < ATTACH_GRACE):
                     return True
         return False
 
@@ -475,6 +503,19 @@ class Queue:
 
         时序上必须在这一刻做（而不是建链时）：派生行只能在**上游真的成功了**
         之后才存在，否则会出现指向空气的 `src_output`。
+
+        ⚠ **登记产物行**与**交接给下一步**是两件事，判据不同（这是那个
+        "串行链第 2 步拿着 .md 去解码"的根因）：
+
+          · **登记**：所有产物都登记（`produce ∈ {derived, sidecar}`）——
+            ZIP 靠 `files.origin='derived'` 这些行收集成员，旁路产物也要能被打包。
+          · **交接**：只有 `produce == "derived"`（`convert` / `normalize`，
+            产出的是"这一步处理完的那个**音频**文件"）才把下游的 `file_id`
+            换过去。`sidecar`（波形图 / 响度图 / 响度报告 / 提取出的封面 / zip）
+            **绝不交接** —— `contract.py` 里写得很清楚：「不是这一步处理的音频，
+            所以不参与输入解析」，但运行时曾经只看 `result.relPath`，
+            于是把 `.md/.png/.jpg` 递给了下一步。实测：**52 组可选组合必坏**，
+            报错还是 ffmpeg 原文（`Invalid data found when processing input`）。
         """
         rel = (result or {}).get("relPath")
         if not rel or not task.file_id:
@@ -487,6 +528,13 @@ class Queue:
             return
         f = store.add_derived_file(rel_to_outputs=str(rel), name=out.name,
                                    size=size, mtime=mtime, derived_from=task.id)
+
+        if _handoff_kind(task) != "derived":
+            # 旁路产物：登记完就结束。**不要**往下走交接，也不要报
+            # "产物没有下游认领" —— 旁路产物天生不需要下游认领（它已经进了 ZIP）。
+            logs.log(f"  ↳ 旁路产物 {out.name} 已登记（不递给下一步）")
+            return
+
         n = store.attach_src_output(task.id, f.id, str(rel))
         if n:
             logs.log(f"  ↳ 产物 {out.name} 已登记，{n} 个下游步骤改用它")

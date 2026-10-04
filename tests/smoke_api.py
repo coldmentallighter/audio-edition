@@ -4,6 +4,7 @@
       -> /api/ops/convert -> /api/tasks -> /api/logs -> 重试接口存在性
 """
 import json
+import os
 import re as _re
 import time
 import urllib.parse
@@ -26,7 +27,10 @@ _PNG_1PX = bytes.fromhex(
     "1f15c4890000000a49444154789c6360000002000100ffff0300000600"
     "05570f4d0000000049454e44ae426082")
 
-BASE = "http://127.0.0.1:8765"
+# 默认打本机的 8765。**可以用 `AUDIO_API_BASE` 覆盖** —— 需要时另起一个实例测新代码，
+# 而不必去杀你正在用的那个（开发时 8765 上常常是几小时前启动的旧进程，
+# 拿它跑冒烟会测出"改了代码却还是旧行为"的假失败）。
+BASE = os.environ.get("AUDIO_API_BASE") or "http://127.0.0.1:8765"
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from backend import cards as cards_mod  # noqa: E402
 from backend import config as config_mod  # noqa: E402
@@ -442,8 +446,12 @@ check("每张内置卡片的 op 都在 OPS 里",
       [(c["name"], c["op"]) for c in _cd["cards"]
        if not c["custom"] and c["op"] not in specs])
 _cov = {c["op"] for c in _cd["cards"] if not c["custom"]}
-check("每个操作都至少有一张内置卡（否则用户没入口）",
-      set(specs) <= _cov, sorted(set(specs) - _cov))
+# `NO_CARD_OPS` 里是**故意没有界面入口**的 op（只作为执行链的一步存在，
+# 例如 `loudness` 只算+缓存）。豁免要**显式登记**，不能靠放宽断言 ——
+# 这条守卫的价值就在于"加了 op 忘了配卡"会被它抓住。
+_missing = sorted(set(specs) - _cov - set(cards_mod.NO_CARD_OPS))
+check("每个操作都至少有一张内置卡（NO_CARD_OPS 里显式豁免的除外）",
+      not _missing, _missing)
 
 # 每张内置卡片的**参数**都要能过验证器 —— 这是 A 轴铺卡后最该守住的东西：
 # 卡片参数受白名单约束，写错一个枚举值/越界数字，用户点下去就报错。
@@ -548,8 +556,16 @@ check("断网时清空卡片与快照",
 
 s, cd = req("GET", "/api/cards")
 check("内置卡片都在 /api/cards 里", cd["builtinCount"] == len(cards_mod.BUILTIN_CARDS), cd["builtinCount"])
-check("内置卡片标记 custom=false", all(not c["custom"] for c in cd["cards"]))
 check("每张卡都带 op 与 params", all(c.get("op") for c in cd["cards"]))
+# ⚠ `cards.json` 是**用户数据**（仓库根，gitignore），跑冒烟时用户很可能本来就有自定义卡。
+# 所以判据不能是"cards 里全是内置卡"，而是"**custom=false 的正好就是内置那批**"。
+# （2026-10 就是在这里红的：工作区里有一张用户的卡，旧写法把它当成"内置卡没标对"。）
+check("custom=false 的正好是内置那批（用户的自定义卡不该被算进来）",
+      {c["id"] for c in cd["cards"] if not c["custom"]}
+      == {c["id"] for c in cards_mod.BUILTIN_CARDS},
+      sorted(c["id"] for c in cd["cards"] if not c["custom"])[:3])
+# 先记下"原来就有哪些"，最后断言**一张都没少** —— 见文件末尾那段。
+_pre_custom_ids = {c["id"] for c in cd["cards"] if c["custom"]}
 
 # 命令预览
 s, pv = req("GET", "/api/cards/ops/convert/preview?params=" +
@@ -646,8 +662,16 @@ junk_cards = [c for c in cd4["cards"] if c["custom"] and c["name"].startswith("�
 for c in junk_cards:
     req("DELETE", f"/api/cards/{c['id']}")
 s, cd5 = req("GET", "/api/cards")
-check("自定义卡片已清空", all(not c["custom"] for c in cd5["cards"]), len(cd5["cards"]))
-check("清理后只剩内置卡片", len(cd5["cards"]) == len(cards_mod.BUILTIN_CARDS), len(cd5["cards"]))
+check("冒烟建的卡都清掉了",
+      not [c for c in cd5["cards"] if c["custom"] and c["name"].startswith("冒烟-")],
+      [c["name"] for c in cd5["cards"] if c["custom"]])
+# ⚠ 原来这里写的是 `len(cd5["cards"]) == len(BUILTIN_CARDS)`（"只剩内置卡"）。
+# 那条只在**干净工作区**成立，而且它暗示了一个极坏的修法："想让这条过，就把卡片删光" ——
+# 而卡片是用户数据。改成断言**用户原有的卡一张没少**（这才是冒烟该保证的事）。
+check("KNOWN: 用户原有的自定义卡一张没少（冒烟不许动别人的数据）",
+      _pre_custom_ids <= {c["id"] for c in cd5["cards"]},
+      (sorted(_pre_custom_ids),
+       sorted(c["id"] for c in cd5["cards"] if c["custom"])))
 
 # 真跑一次：自定义卡片的参数必须原样进到任务里
 print("== 17. 自定义卡片真跑一次（参数要真的传到执行层）==")
@@ -765,7 +789,15 @@ print("\n== 显示所在目录（/reveal） ==")
 s, fl = req("GET", "/api/files")
 _files = fl.get("files") or []
 if _files:
-    _rid = _files[0]["id"]
+    # ⚠ 别直接拿 `_files[0]`：库里可能有**磁盘上已不存在**的陈旧记录
+    # （工作区被清过、或某个 demo 种子留下的），而 `/reveal` 对那种行返回 404
+    # 是**正确行为**。所以要挑一条**工作副本确实还在**的。
+    _live = next((x for x in _files
+                  if (config_mod.UPLOADS / x["relPath"]).exists()), None)
+    if _live is None:
+        check("至少有一个文件的工作副本还在（reveal 的前提）", False,
+              f"{len(_files)} 行，磁盘上一个都不在")
+    _rid = (_live or _files[0])["id"]
     s, r = req("POST", f"/api/files/{_rid}/reveal?open=false")
     check("reveal 返回 200", s == 200, f"{s} {str(r)[:80]}")
     _p = (r or {}).get("path", "")
@@ -871,6 +903,51 @@ check("refLufs 参数真的透传了（-18 出现在报告里）", "-18" in _txt
 # 真峰值单独在旁边写警告。谁"修"回去都不会红 —— 所以这里钉住文案。
 check("自洽性校验不拿真峰值与响度比大小（量纲混用的钉子）",
       "不同量纲" in _txt and "顺序异常" not in _txt, _txt[:300])
+
+
+# ---- 卡片上那行「Loudness … LUFS」的数据来源 ----
+# 用户实测报的：每张卡上都写着 `undefined LUFS`。后端那一半的原因是
+# **测出来的响度从来没写进文件记录**（只塞进了任务结果），而前端那半是
+# 压根没读 `info.loudness`（前端那半由 `tests/loudness_display_check.py` 钉）。
+def _file_info(fid):
+    _s, _f = req("GET", f"/api/files/{fid}")
+    return (_f or {}).get("info") or {}
+
+
+_i = _file_info(_lid)
+check("响度测量值落进了文件记录（info.loudness）",
+      isinstance(_i.get("loudness"), (int, float)), _i)
+_integrated = ((_res.get("summary") or {}).get("integrated"))
+check("落库的响度就是这趟实测的 integrated（不是另算一个）",
+      isinstance(_i.get("loudness"), (int, float)) and _integrated is not None
+      and abs(_i["loudness"] - float(_integrated)) < 0.01,
+      (_i.get("loudness"), _integrated))
+check("同一组里还写下了真峰值与响度范围",
+      isinstance(_i.get("truePeak"), (int, float))
+      and isinstance(_i.get("loudnessRange"), (int, float)), _i)
+
+# ⚠ 这两条是**回归钉子**：`set_file_info` 是整体覆盖，而 `probe`（ffprobe，
+# 只读元数据、不解码）读不出响度 —— 用整体覆盖的话，"重新探测一下"或
+# "改个标签"就会把那行数字擦掉，用户看到的是"数字莫名其妙没了"。
+_s, _p = req("POST", f"/api/files/{_lid}/probe")
+_prow = wait_task_id((_p or {}).get("taskId"))
+check("重新探测任务跑完", (_prow or {}).get("state") == "success", _prow)
+_i2 = _file_info(_lid)
+check("「重新探测」之后响度还在（probe 必须合并而不是覆盖）",
+      _i2.get("loudness") == _i.get("loudness"),
+      (_i.get("loudness"), _i2.get("loudness")))
+check("但探测结果本身刷新了（info 不是空壳）",
+      bool(_i2.get("format")) and bool(_i2.get("sampleRate")), _i2)
+
+_s3, _tr = req("PUT", f"/api/files/{_lid}/tags", {"tags": {"title": "报响-改过"}})
+check("PUT /api/files/{id}/tags 200", _s3 == 200, _tr)
+_i3 = _file_info(_lid)
+check("改标签之后响度还在（元数据编辑器走内联路径，同样必须合并）",
+      _i3.get("loudness") == _i.get("loudness"),
+      (_i.get("loudness"), _i3.get("loudness")))
+check("改标签真的写进去了",
+      str((_i3.get("tags") or {}).get("title") or "") == "报响-改过", _i3.get("tags"))
+
 # 服务端注入的 `_op` 不许被客户端覆盖：传了 `_op=loudness-image` 也必须出报告。
 # ⚠ 这一条**必须传 taskId 等它自己结案**：用 `wait_task(file_id)` 或"按文件找最近一条"
 # 会立刻拿到**上一条**（已 success）而"通过" —— 断言变成空转（这个坑真踩过，
@@ -892,12 +969,12 @@ req("DELETE", f"/api/files/{_lid}?withDisk=true")
 for _p in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.md"):
     _p.unlink(missing_ok=True)
 
-print("== 20. 导出响度分析图（loudness-image 真出一张 PNG）==")
-# 与 §19 同理：这一节证的是"路线 B 真的在出图"，而不是"任务成功了"。
-# 图的好坏由 `tests/loudness_png_check.py` 逐项验（轴映射/比例/确定性），
-# 这里只验**接线**：op → handler → 落盘 → 是一张能解码的 PNG。
+print("== 20. 导出响度分析图（loudness-image 真出一张 SVG）==")
+# 与 §19 同理：这一节证的是"真的在出图"，而不是"任务成功了"。
+# 这里只验**接线**：op → handler → 落盘 → 是一张结构完整的 SVG。
+# 图本身的坐标/几何由 `tests/dsh-wheel/check_loudness_svg.py` 逐项断言（不需要浏览器）。
 _suf2 = uuid.uuid4().hex[:6]
-for _old in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.png"):
+for _old in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.*"):
     _old.unlink(missing_ok=True)
 _lm2 = WORK / f"loud-img-{_suf2}.flac"
 subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
@@ -911,8 +988,11 @@ _lid2 = next((x["id"] for x in up.get("saved", [])
               if x["name"] == f"报响-{_suf2}.flac"), None)
 check("上传一个用于出图的文件", _lid2 is not None, up)
 
+# ⚠ 参数表 2026-10 变了：`highLufs`（红带下界）**已删除** —— 红区现在固定在
+# **−3 LUFS**（老板定），不再是从 `Integrated + LRA/2` 推的可配阈值。
+# 所以这里不能再传 `highLufs`：卡片参数校验会以"不认识这些参数"直接 400。
 s, sub3 = req("POST", "/api/ops/loudness-image",
-              {"fileIds": [_lid2], "force": True, "width": 1600, "highLufs": ""})
+              {"fileIds": [_lid2], "force": True, "width": 1600})
 check("POST /api/ops/loudness-image 200", s == 200, sub3)
 _row3 = wait_task_id((sub3.get("taskIds") or [None])[0])
 check("出图任务成功", _row3 is not None and _row3.get("state") == "success",
@@ -920,33 +1000,31 @@ check("出图任务成功", _row3 is not None and _row3.get("state") == "success
 _res3 = (_row3 or {}).get("result") or {}
 _out3 = _res3.get("output") or ""
 check("结果是 image 类型", _res3.get("kind") == "image", _res3.get("kind"))
-check("落盘路径是 outputs/loudness/*.loudness.png",
-      _out3.startswith("outputs/loudness/") and _out3.endswith(".loudness.png")
+check("落盘路径是 outputs/loudness/*.loudness.svg",
+      _out3.startswith("outputs/loudness/") and _out3.endswith(".loudness.svg")
       and _suf2 in _out3, _out3)
-_png = ROOT / _out3 if _out3 else None
-check("PNG 真的存在且够大（不是 0 字节占位）",
-      bool(_png and _png.exists() and _png.stat().st_size > 5000),
-      _png.stat().st_size if (_png and _png.exists()) else "不存在")
-check("文件头是 PNG 签名",
-      bool(_png and _png.exists() and _png.read_bytes()[:8]
-           == b"\x89PNG\r\n\x1a\n"),
-      (_png.read_bytes()[:8] if (_png and _png.exists()) else None))
-# `width` 参数真的生效（不是画死 2400 再缩放）
-_w = _h = 0
-if _png and _png.exists():
-    _b = _png.read_bytes()
-    # IHDR 就在头 8 字节之后：4 字节长度 + 4 字节类型 + 宽 4 + 高 4
-    _w = int.from_bytes(_b[16:20], "big")
-    _h = int.from_bytes(_b[20:24], "big")
-check("`width=1600` 真的画成 1600 宽（读 PNG 的 IHDR，不是看参数）",
-      _w == 1600, (_w, _h))
-check("高度按同一比例（约 287，不是拉伸）", 270 <= _h <= 300, (_w, _h))
-# 空串 `highLufs` 必须被当成"未设置"而不是报错（曾经会 400）
-check("空串 highLufs 被当成未设置（不报'必须是数字'）",
-      "必须是数字" not in str(_res3.get("error") or ""), _res3.get("error"))
+_art = ROOT / _out3 if _out3 else None
+check("SVG 真的存在且不为空",
+      bool(_art and _art.exists() and _art.stat().st_size > 2000),
+      _art.stat().st_size if (_art and _art.exists()) else "不存在")
+_doc = _art.read_text(encoding="utf-8") if (_art and _art.exists()) else ""
+check("是完整的 SVG 文档",
+      _doc.startswith("<svg") and _doc.rstrip().endswith("</svg>"), _doc[:40])
+check("四个图层都在（文件名 / 标尺列 / 绘图区 / 时间带 / 卡片）",
+      all(f'id="{k}"' in _doc for k in
+          ("filename", "axis-rail", "plot", "time-band", "cards")))
+check("画的是 F 轴的 9 个刻度", _doc.count('class="grid"') == 9,
+      _doc.count('class="grid"'))
+# `width` 参数是**显示宽度**，`viewBox` 永远是设计单位 —— 矢量图不重排版。
+# 设计宽度从规格里读（别写死：2026-10 加宽过一次，660 → 900，画布 1031.81 → 1271.81）
+from backend import chart_layout as _layout                       # noqa: E402
+check("`width=1600` 反映在显示宽度上，viewBox 仍是设计单位",
+      'width="1600"' in _doc
+      and f'viewBox="0 0 {_layout.CANVAS_W:.2f} ' in _doc,
+      _doc[_doc.find("viewBox"):_doc.find("viewBox") + 46])
 
 req("DELETE", f"/api/files/{_lid2}?withDisk=true")
-for _p in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.png"):
+for _p in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.svg"):
     _p.unlink(missing_ok=True)
 
 print(f"\n结果：{ok} passed, {fail} failed")

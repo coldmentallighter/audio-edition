@@ -112,7 +112,7 @@ OPS: dict[str, dict[str, Any]] = {
     "extract-cover": {
         "task": "cover_extract",
         "label": "提取封面",
-        "desc": "把内嵌封面导出成 jpg，放在 outputs/covers/。",
+        "desc": "把内嵌封面导出成 jpg，放在 outputs/covers/（链上则在本轮执行的目录里）。",
         "category": "封面", "icon": "cover", "params": [],
         "preview": "ffmpeg -i <文件> -map 0:v:0 -frames:v 1 -c:v mjpeg <输出.jpg>",
     },
@@ -184,7 +184,7 @@ OPS: dict[str, dict[str, Any]] = {
         "task": "waveform",
         "label": "导出波形 PNG",
         "desc": "把整首歌的波形渲染成一张 PNG。默认白色波形 + 透明底，可以直接叠到任何封面上；"
-                "输出在 outputs/waveforms/。",
+                "输出在 outputs/waveforms/（链上则在本轮执行的目录里）。",
         "category": "峰值", "icon": "wave",
         "params": [
             {"key": "width", "label": "宽度", "type": "int", "default": 1920,
@@ -216,8 +216,10 @@ OPS: dict[str, dict[str, Any]] = {
     "zip": {
         "task": "zip",
         "label": "打包 ZIP",
-        "desc": "把这一批文件打成一个 ZIP，放在 outputs/zips/。"
-                "在链上时，它装的是**它之前那一步的最终产物**；它自己是第一项时装源文件。",
+        "desc": "把**打包窗口内的全部终产物**打成一个 ZIP：串行取每个文件走到打包前一步的"
+                "产物、并行取窗口内全部非 zip 产物（所以一条链可以有多个打包步骤）。"
+                "链上落 `outputs/<本次执行的目录>/`，名字是 `upload-<日期>-<来源卡片名>.zip`；"
+                "单独一张时打包源文件，落 `outputs/zips/`。",
         "category": "校验/打包", "icon": "zip", "params": [],
         "preview": "zip <输出.zip> <文件...>",
     },
@@ -244,37 +246,34 @@ OPS: dict[str, dict[str, Any]] = {
     "loudness-image": {
         "task": "loudness",
         "label": "导出响度分析图",
-        "desc": "把响度总览图渲染成一张 **PNG**（双色包络 + 左右轴 + 时间刻度 + "
-                "底部 8 项指标），放在 outputs/loudness/。"
-                "纵轴是**非线性**的分段映射（有效响度区被放大），与参考图一致。",
+        "desc": "把响度总览图渲染成一张 **SVG** 整页（纵轴标尺 + 双色响度包络 + "
+                "总响度虚线 + 时间带 + 元数据卡 / 响度卡 / 动态卡），放在 "
+                "outputs/loudness/（链上则在本轮执行的目录里）。矢量、可任意缩放，"
+                "中文用看的人的字体（不会变成方块）。版式与纵轴规格见 "
+                "backend/chart_layout.py 与 backend/chart_axis.py。",
         "category": "响度", "icon": "gain",
         "params": [
-            {"key": "width", "label": "宽度", "type": "int", "default": 2400,
-             "min": 800, "max": 8000,
-             "desc": "输出图片的像素宽度，整图约 6.6:1。按同一套比例重新排版"
-                     "（不是拉伸位图），所以放大更清晰、缩小也不糊。"},
+            {"key": "width", "label": "显示宽度", "type": "int", "default": 1200,
+             "min": 600, "max": 8000,
+             "desc": "SVG 的显示宽度（px）。`viewBox` 固定是设计单位，所以这**只是"
+                     "显示尺寸、不重排版** —— 矢量图任意缩放都清晰；嵌进窄容器时 "
+                     "CSS 的 max-width 还会再兜一层。"},
             {"key": "refLufs", "label": "参考线响度", "type": "float", "default": -23,
              "min": -54, "max": -5,
              "desc": "那条橙色参考线画在哪个响度上。EBU R128 是 -23，"
                      "流媒体常用 -14，有声书 -18。"},
-            {"key": "highLufs", "label": "红带下界", "type": "float", "default": "",
-             "min": -54, "max": -5,
-             "desc": "高于此响度的段落用红带叠加。**留空 = 自动**"
-                     "（取 Integrated + LRA/2，即响度范围的上半段）—— "
-                     "原图那条红带的口径是反推的，这里给一个能从数据推出来的含义，"
-                     "想按听感调就直接填数值。"},
             {"key": "force", "label": "强制重算", "type": "bool", "default": False,
              "desc": "同上：跳过缓存重新分析。"},
         ],
         "preview": "ffmpeg -i <文件> -map 0:a:0 -af "
-                   "ebur128=peak=true:framelog=verbose -f null -   # 取时间线"
-                   "；再由后端按 axis_y 分段控制点用 PIL 画成 PNG",
+                   "ebur128=peak=sample+true:framelog=verbose:metadata=true -f null -"
+                   "   # 取时间线；再由后端按 chart_layout / chart_axis 渲染成 SVG",
     },
     "loudness-report": {
         "task": "loudness",
         "label": "响度分析报告",
         "desc": "把响度分析写成一份 **Markdown 报告**（汇总表 + 逐曲 8 项指标 + "
-                "响度分区统计 + 最响/最轻的时间点），放在 outputs/loudness/。"
+                "响度分区统计 + 最响/最轻的时间点），放在 outputs/loudness/（链上则在本轮执行的目录里）。"
                 "适合归档、交付说明，或贴进 issue 复现问题。",
         "category": "响度", "icon": "tag",
         "params": [
@@ -367,6 +366,18 @@ def _shared_task_ops() -> frozenset[str]:
 
 SHARED_TASK_OPS = _shared_task_ops()
 
+#: 会**用到主题**的 op —— 也就是产出带颜色的产物、并且颜色要在服务端算出来的那些。
+#:
+#: 目前只有 `loudness-image`：它渲染 SVG，而 SVG 有两种活法（内联进页面 / 导出成独立
+#: 文件），后者**没有任何 CSS 变量可用**。所以颜色必须在服务端按主题算成实色写进文件
+#: （老板 2026-10："svg 生成的主题颜色改成用户执行链时主题的，并在导出时将颜色硬编码
+#: 入文件"）。`chain.build_chain` 只给这些 op 注入链级的 `theme`/`themeMode`。
+#:
+#: ⚠ 别的产物不在这里：`waveform` 是 ffmpeg 画的 PNG（颜色走它自己的参数），
+#: `loudness-report` 是 Markdown（没有颜色）。前端画布是**另一个故事** ——
+#: 它在浏览器里，直接读 `theme.css` 的变量，天然跟着主题走。
+THEME_OPS = frozenset({"loudness-image"})
+
 
 def task_params(op: str, params: dict | None = None) -> dict:
     """把某个 op 的 params 规范成**任务**的 params（建任务前必须过这一道）。
@@ -382,4 +393,22 @@ def task_params(op: str, params: dict | None = None) -> dict:
     if op in SHARED_TASK_OPS:
         p["_op"] = op
     return p
+
+
+def op_of_task(task_type: str, params: dict | None = None) -> str:
+    """这条任务**实际执行的是哪个 op** —— 与 `task_params` 互逆。
+
+    ⚠ 两个来源，**顺序不能反**：先看服务端注入的 `_op`，再按任务类型反查。
+    按类型反查只能拿到"第一个登记的那个 op"（响度三兄弟共用任务类型 `loudness`，
+    反查永远得到 `loudness` 这个 `produce=none` 的），于是"这一步交出的是不是
+    能递给下一步的**音频产物**"会判错 —— 而那个判据决定
+    `queue._publish_derived` 要不要交接（旁路产物被交接就是那个串行报错的根因）。
+    """
+    op = str((params or {}).get("_op") or "").strip()
+    if op in OPS:
+        return op
+    for cand in OPS:
+        if _task_of(cand) == task_type:
+            return cand
+    return ""
 

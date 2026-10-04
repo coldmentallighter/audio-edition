@@ -161,7 +161,10 @@ def put_tags(fid: str, payload: dict = Body(...)) -> dict:
         # 「这格式不支持标签」（AAC / 图片…）是**预期**情况 → 415；
         # 其余（metaflac 挂了、磁盘写失败…）才是 500。
         raise HTTPException(415 if r.unsupported else 500, r.error)
-    store.set_file_info(fid, audio.probe(f.path).as_dict())
+    # 元数据编辑器走的是这条**内联**路径（不发任务），它和 `h_tag_edit` 一样会
+    # 重写文件但不动音频 —— 所以必须**合并**：整体覆盖会把响度测量值擦掉，
+    # 而那条「Loudness … LUFS」是改了标签之后就消失得最莫名其妙的一处。
+    store.merge_file_info(fid, audio.probe(f.path).as_dict())
     return {"ok": True, "method": r.method, "written": r.written,
             "removed": r.removed, "reencoded": False,
             "tags": audio.read_tags(f.path)}
@@ -173,8 +176,11 @@ def delete_file(fid: str, purge: bool = False, withDisk: bool = False) -> dict:
     if not f:
         raise HTTPException(404, "文件不存在")
     if withDisk and f.path.exists():
-        f.path.unlink(missing_ok=True)
-        config.prune_empty_dirs(f.path.parent, config.UPLOADS)
+        # 先移进 `.trash/`（保留 `uploads/` 下的相对路径），失败才退回真删
+        if config.move_to_trash(f.path, bucket="uploads", reason="api:delete") is None:
+            f.path.unlink(missing_ok=True)
+        else:
+            config.prune_empty_dirs(f.path.parent, config.UPLOADS)
     store.delete_file(fid, purge=purge)
     return {"ok": True, "purged": purge, "removedFromDisk": withDisk}
 
@@ -205,8 +211,12 @@ def delete_files(payload: dict = Body(...)) -> dict:
                 continue
             size = f.size or 0
             if with_disk and f.path.exists():
-                f.path.unlink(missing_ok=True)
-                pruned += config.prune_empty_dirs(f.path.parent, config.UPLOADS)
+                # 与单条删除同一口径：先移进 `.trash/`，失败才真删
+                if config.move_to_trash(f.path, bucket="uploads",
+                                        reason="api:delete-batch") is None:
+                    f.path.unlink(missing_ok=True)
+                else:
+                    pruned += config.prune_empty_dirs(f.path.parent, config.UPLOADS)
             store.delete_file(fid, purge=purge)
             deleted.append({"id": fid, "name": f.name})
             freed += size

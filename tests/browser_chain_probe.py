@@ -130,7 +130,12 @@ PROBE = r"""
     out.notesVisibleSerial = notes && !notes.hidden;
     setChainMode('parallel'); await wait(100);
 
-    // ---------- 3) 卡片可用性置灰 ----------
+    // ---------- 3) 卡片可用性：**压缩包之后不再置灰**（P1 起） ----------
+    // 回归钉子（反向）：原来这里钉的是"打包 ZIP 之后所有卡片变灰、点了不加入链"。
+    // 但 `zip` 是 `mode=read` + `consumes=false`：它什么都没改动，后面的步骤照旧
+    // 作用于当前文件；而且一条链可以有多个打包步骤（每个收集"上一个打包步骤之后"
+    // 的产物，见 `执行链打包与串行交接方案.md` §4）。判据改动必须**前后端同步**，
+    // 所以这条与后端 `boundary.availability` 的对账是本节的重点。
     const zipCardEl = qa('#cardSections .fcard[data-card]')
         .find(el => el.dataset.card === cZip.name);
     out.zipCardExists = !!zipCardEl;
@@ -143,15 +148,15 @@ PROBE = r"""
     const anyCard = qa('#cardSections .fcard[data-card]')
         .find(el => !el.classList.contains('fcard--blocked'));
     out.anySelectableAfterZip = !!anyCard;
-    out.blockedTitleSample = blockedEls.length ? (blockedEls[0].title || '').slice(0, 90) : null;
+    // 压缩包之后**每张卡都还该可选**（不置灰）
+    out.selectableAfterZip = qa('#cardSections .fcard[data-card]').length - blockedEls.length;
+    out.zipTailHint = (typeof availabilityOf === 'function')
+        ? (availabilityOf('tags') || {}).why : null;
 
-    // 点一张置灰的卡：**不能加入链**
-    const before = chain.length;
-    if (blockedEls.length) blockedEls[0].click();
-    await wait(150);
-    out.clickBlockedAdded = chain.length - before;
+    // 「压缩包不会被递下去」这句提示要真的出现在链上提示区
+    out.notesTextAfterZip = notes ? notes.textContent.trim().slice(0, 160) : null;
 
-    // 删掉 zip 那一步 → 全部恢复
+    // 删掉 zip 那一步 → 状态与加之前一致
     chain.pop(); renderChain(); await wait(150);
     out.blockedCountAfterUndo = qa('#cardSections .fcard--blocked').length;
     out.chainLenAfterUndo = chain.length;
@@ -317,7 +322,10 @@ PROBE = r"""
           const give = ts.gives;
           const needs = spec.needs || [];
           let beOk;
-          if (give === 'archive') beOk = false;
+          // ⚠ 探针里这份是**后端判据的镜像**（`boundary.availability`）：
+          // 压缩包那条 P1 起从"硬禁"降级成"可选 + 提示"，所以这里也必须是
+          // `true` —— 否则对账会把"前后端其实一致"报成不一致。
+          if (give === 'archive') beOk = true;
           else if (ts.produce === 'none' || ts.produce === 'sidecar') beOk = true;
           else if (spec.consumes === false) beOk = true;
           else beOk = (needs.includes('any') || needs.includes(give));
@@ -526,18 +534,20 @@ async def run_all() -> None:
         print("--- 卡片可用性（链尾决定） ---")
         check("ZIP 卡片在加入前是可选的", out["zipBlockedBefore"] is False,
               out["zipBlockedBefore"])
-        check("`打包 ZIP` 加入链后，**所有**卡片被置灰",
-              out["blockedCountAfterZip"] == out["totalCards"] and out["totalCards"] > 0,
+        # ⚠ P1 起这里**反过来**钉：压缩包之后不再整片置灰。
+        # 原来钉的是"打包 ZIP 之后所有卡片变灰、点了不加入链"，而现在
+        # `打包 → 任何卡` 都是合法链（多打包步骤 + 压缩包不会被递下去）。
+        check("`打包 ZIP` 加入链后**没有卡片被置灰**",
+              out["blockedCountAfterZip"] == 0,
               f"blocked={out['blockedCountAfterZip']} total={out['totalCards']}")
-        check("没有一张还能选", out["anySelectableAfterZip"] is False)
-        check("置灰的原因写在 title 里",
-              "最后一环" in (out["blockedTitleSample"] or "")
-              or "接不住" in (out["blockedTitleSample"] or ""),
-              out["blockedTitleSample"])
-        check("点置灰的卡**不会**加入链", out["clickBlockedAdded"] == 0,
-              out["clickBlockedAdded"])
-        check("删掉 ZIP 之后全部恢复可选", out["blockedCountAfterUndo"] == 0,
-              out["blockedCountAfterUndo"])
+        check("每一张都还能选", out["selectableAfterZip"] == out["totalCards"],
+              (out["selectableAfterZip"], out["totalCards"]))
+        check("链尾是压缩包时，提示里说清它不会被递下去",
+              "压缩包" in (out["zipTailHint"] or ""), out["zipTailHint"])
+        check("链上提示区真的显示了这条提示",
+              "压缩包" in (out["notesTextAfterZip"] or ""), out["notesTextAfterZip"])
+        check("删掉 ZIP 之后状态与加之前一致（都不置灰）",
+              out["blockedCountAfterUndo"] == 0, out["blockedCountAfterUndo"])
 
         print()
         print("--- 只读分析（gives=none）之后不许整片置灰 ---")

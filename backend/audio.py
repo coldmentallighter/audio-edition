@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
 
-from backend import config, runner
+from backend import config, drp, runner
 from backend.toolchain import toolchain
 
 # ---------------------------------------------------------------- 探测
@@ -64,6 +64,58 @@ class ProbeInfo:
             "hasCover": self.has_cover,
             "error": self.error,
         }
+
+
+def chapters(path: Path) -> list[dict]:
+    """读音频**自带的章节**（= 图上的 marker）。
+
+    老板："marker 音频自己会带，有则加载，无则不需要。"
+
+    `ffprobe -show_chapters` 一条路通吃三种真实来源（本机 ffmpeg 9.0.2 实测）：
+
+    | 来源 | 结果 |
+    |---|---|
+    | Vorbis 注释 `CHAPTER001=00:00:00.000` + `CHAPTER001NAME=Intro` | 带名字 |
+    | FLAC `CUESHEET`（`metaflac --import-cuesheet-from`） | **名字是空的** |
+    | WAV 的 `cue `/`LIST adtl`（DAW 导出） | 名字是中文的，如 `标记 0` |
+
+    三条口径：
+
+    1. **取每一章的起点**，不取终点 —— 章节首尾相接时取终点会把同一时刻标两遍。
+    2. 没有名字就用 `chart_layout.MARKER_DEFAULT_NAME`（`Marker`）。这不是锦上添花：
+       CUESHEET 那条路给不出名字，没有兜底就会画出一排空标签。
+    3. **没有章节就返回 `[]`** —— 那是常态（本机 `uploads/` 里 5 个 flac 一个都没有），
+       不是异常，不要抛错、也不要在时间带上占空行。
+    """
+    from backend import chart_layout as _layout                    # noqa: PLC0415
+
+    if not path.exists():
+        return []
+    try:
+        ffprobe = toolchain.require("ffprobe")
+    except Exception:                                              # noqa: BLE001
+        return []
+
+    r = runner.run([ffprobe, "-v", "error", "-show_chapters", "-of", "json",
+                    str(path)], timeout=30)
+    if not r.ok:
+        return []
+    try:
+        raw = json.loads(r.stdout or "{}").get("chapters") or []
+    except json.JSONDecodeError:
+        return []
+
+    out: list[dict] = []
+    for c in raw:
+        try:
+            t = float(c.get("start_time"))
+        except (TypeError, ValueError):
+            continue
+        name = str((c.get("tags") or {}).get("title") or "").strip() \
+            or _layout.MARKER_DEFAULT_NAME
+        out.append({"time": round(t, 3), "name": name})
+    out.sort(key=lambda m: m["time"])
+    return out
 
 
 def probe(path: Path) -> ProbeInfo:
@@ -252,16 +304,34 @@ class TagWriteResult:
 
 
 def write_tags(path: Path, tags: dict[str, str], *, clear_missing: bool = False) -> TagWriteResult:
-    """写标签，不重新编码。
-
-    clear_missing=True 时，UI_FIELDS 里没给值的字段会被删除。
-    """
     res = TagWriteResult()
     if not path.exists():
         res.error = "文件不存在"
         return res
 
-    clean = {k.lower(): str(v) for k, v in tags.items() if v is not None}
+    # ⚠ **和 read_tags 对称地做一次键名归一化**。
+    #
+    # read_tags 走 CANON_KEYS，把 `track` / `TRACKNUMBER` / … 一律归到
+    # `tracknumber`；write_tags 原来只做了 `k.lower()` —— 前端发的键名只要不是
+    # UI_FIELDS 里那一个，后果按容器分成两类，**都很糟**：
+    #
+    #   · FLAC 走 `_write_tags_metaflac`，那里 `for k in UI_FIELDS` 遍历的是
+    #     **白名单**，多出来的 `track` 一条 `--set-tag` 都不会生成，但函数照样
+    #     `return res`（written=0、error=""），`h_tag_edit` 拿到 r.ok=True 报成功
+    #     —— **用户以为写进去了，实际一个字没改**。若同时 clear_missing=True，
+    #     还会执行 `--remove-tag=TRACKNUMBER` 把已有的音轨号删掉。
+    #   · MP3 / M4A / WAV 走 mutagen，`f["track"] = [...]` —— easy 模式不认
+    #     `track`（标准名是 `tracknumber`），抛 ValueError 被 catch 成 failed。
+    #
+    # 用 CANON_KEYS 归一是为了**和读端共用同一张表** —— 两边各写一份，
+    # 早晚会分叉（读认得、写不认得，或反过来）。
+    clean: dict[str, str] = {}
+    for k, v in tags.items():
+        if v is None:
+            continue
+        key = str(k).strip().lower()
+        clean[CANON_KEYS.get(key, key)] = str(v)
+
     if path.suffix.lower() == ".flac":
         return _write_tags_metaflac(path, clean, clear_missing)
     return _write_tags_mutagen(path, clean, clear_missing)
@@ -270,6 +340,7 @@ def write_tags(path: Path, tags: dict[str, str], *, clear_missing: bool = False)
 def _write_tags_metaflac(path: Path, tags: dict[str, str], clear_missing: bool) -> TagWriteResult:
     mf = toolchain.path_of("metaflac")
     res = TagWriteResult(method="metaflac")
+    unknown = [k for k in tags if k not in UI_FIELDS]
     if not mf:
         res.error = "metaflac 不可用"
         return res
@@ -499,7 +570,36 @@ def drop_cover_cache(file_id: str) -> None:
 # aiff 虽然退出码 0，但图片流会被静默丢掉，所以**不在**白名单里。
 COVER_FORMATS = {".flac", ".mp3", ".m4a", ".wma"}
 
-CACHE_VERSION = 1
+# 缓存版本。**改动响度数据的含义/单位时就必须 +1**，否则旧缓存会继续供出旧值
+# —— `file_key()` 只看路径+大小+mtime，内容没变就命中缓存，代码改了它不知道。
+#
+# v2: 修了 truePeak / samplePeak 的单位（线性幅度 → dB）、修了 LRA 取到伪值 20、
+#     新增 dra 与 samplePeakMax、eBur128 参数 peak=true → peak=sample+true。
+#     v1 缓存里那些 "truePeakMax: 0.1" 必须作废。
+CACHE_VERSION = 5
+
+#: ebur128 的帧率。时间线、DRP 的窗/步都以它为单位换算。
+EBUR_HZ = 10
+
+#: 削波段落的合并间隔（秒）。逐帧峰值是 **10fps（一帧 0.1s）**，一次削波里夹一帧
+#: 没顶满就会断成两段 —— 所以取**正好一帧**。
+#:
+#: 为什么从 0.5 降到 0.1（老板 2026-10 报"爆音标红是个地图炮：一有就开始标，一标就
+#: 从头标到尾"）。两个素材各扫一遍，逐帧 `Peak_level >= 0`：
+#:
+#: | 合并 | INFinite - Stellar.flac（159.6s，raw 99 段） | ariiol - REK421.flac（215.8s，raw 260 段） |
+#: |---|---|---|
+#: | 0 / 0.05 / **0.1** | 99 段 / 70.8s / 最长 6.7s | 260 段 / 121.5s / 最长 11.6s |
+#: | 0.25 | 46 段 / 81.4s / 最长 **32.0s** | 101 段 / 153.3s / 最长 **32.4s** |
+#: | 0.5 | 9 段 / 94.5s / 最长 **86.2s** | 32 段 / 177.3s / 最长 33.1s |
+#: | 1.0 | 7 段 / 96.2s / 最长 88.2s | 8 段 / 195.0s / 最长 **101.2s** |
+#:
+#: **0 → 0.1 在两个素材上都逐段完全相同** ⇒ 0.1 只会吸收"一帧没顶满"，绝不会把分开的
+#: 爆音糊成一段。0.25 起长段就爆到 32s，0.5 直接把 Stellar 的 99 段糊成 9 段、最长
+#: 86.2s —— 那正是老板看到的"一标就标到尾"。（0.5 当初是照 REK421 一首调的，只看了
+#: 段数没看**最长段**，于是把"糊得狠"当成了"合得干净"。）
+CLIP_MERGE_GAP = 0.1
+
 
 def file_key(path: Path) -> str:
     """缓存键：路径 + 大小 + mtime，内容变了自动失效。"""
@@ -600,8 +700,11 @@ def loudness_timeline(path: Path, *, force: bool = False,
     单趟配方（实测 3:07 的歌 0.7s）：
 
         ffmpeg -i <src> -map 0:a:0 \\
-          -af "ebur128=peak=true:framelog=verbose:metadata=true,
+          -af "ebur128=peak=sample+true:framelog=verbose:metadata=true,
                ametadata=mode=print:file=ebur-meta.txt" -f null -
+
+    `peak=sample+true` 不能写成 `peak=true` —— 后者**不输出** `sample_peak`（见下面
+    `_EBUR_KEYS` 那段实测）。单趟就能拿到全部 6 项响度指标，不需要额外跑 `astats`。
 
     两处**必须**照做，都是实测踩出来的（见 响度总览图实现构想.md §5）：
 
@@ -640,31 +743,64 @@ def loudness_timeline(path: Path, *, force: bool = False,
     suffix = f"ebur-meta-{tag}.txt" if tag else f"ebur-meta-{os.getpid()}.txt"
     meta = config.CACHE / suffix
     meta.unlink(missing_ok=True)
+    # 逐帧峰值那一趟的元数据文件（同样每个任务唯一）
+    peak_suffix = (f"peak-meta-{tag}.txt" if tag
+                   else f"peak-meta-{os.getpid()}.txt")
+    peak_meta = config.CACHE / peak_suffix
+    peak_meta.unlink(missing_ok=True)
 
     # 注意 `file=` 只给**文件名**，路径由 cwd 提供（见上面第 1 条）
+    #
+    # `peak=sample+true` 而不是 `peak=true`：实测（tests/dsh-wheel/verify_units.py）
+    # `peak=true` **根本不输出** `lavfi.r128.sample_peak`，只有 `true_peak`；
+    # `peak=sample` 则反过来。要同时拿到采样峰值与真峰值必须写 `sample+true`，
+    # 这也是"不用另跑一趟 astats"的前提。
     r = runner.run([
         ffmpeg, "-hide_banner", "-loglevel", "error", "-nostats",
-        "-i", str(path),
+        # `-i` 必须给**绝对路径**：这一趟的 `cwd` 被设成了 `.cache`（上一段那条理由），
+        # 相对路径会被解析到 `.cache/` 下面去，报 "No such file or directory"。
+        # 实测踩过：`loudness_timeline(Path("uploads/x.flac"))` 直接失败，
+        # 而 App 里传的一直是绝对路径，所以这个坑只在脚本/测试里露头。
+        "-i", str(Path(path).resolve()),
         "-map", "0:a:0",
-        "-af", ("ebur128=peak=true:framelog=verbose:metadata=true,"
-                f"ametadata=mode=print:file={suffix}"),
+        # 两趟元数据用**两个** `ametadata` 实例、写两个文件：
+        #
+        #  · `ebur128` —— 逐帧响度（10Hz）+ 汇总值。它的 `true_peak` / `sample_peak`
+        #    是**到当前为止的最大值**（实测：序列单调不减），所以**不能**拿来定位
+        #    "哪一刻爆音"——那样会从第一次越线起把整首标红。
+        #  · `astats` —— **逐帧** `Peak_level`（dBFS，按音频帧 ~46.8fps）。这才是能
+        #    定位削波时刻的数据源。
+        #
+        # 两趟在**同一次解码**里做完，没有额外解一遍音频。`measure_perchannel=none`
+        # 把输出从 27MB 压到 0.8MB（只留 Overall.Peak_level）。
+        "-af", ("ebur128=peak=sample+true:framelog=verbose:metadata=true,"
+                f"ametadata=mode=print:file={suffix},"
+                "astats=metadata=1:reset=1:measure_perchannel=none"
+                ":measure_overall=Peak_level,"
+                f"ametadata=mode=print:file={peak_suffix}"),
         "-f", "null", "-",
     ], timeout=config.TASK_TIMEOUT, cwd=config.CACHE)
 
     if not r.ok:
         raise RuntimeError(f"响度分析失败: {r.stderr_summary}")
 
-    text = ""
-    try:
-        text = meta.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        pass
-    finally:
-        meta.unlink(missing_ok=True)      # 中间文件不留着
+    text = peak_text = ""
+    for f, keep in ((meta, False), (peak_meta, True)):
+        try:
+            got = f.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            got = ""
+        finally:
+            f.unlink(missing_ok=True)     # 中间文件不留着
+        if keep:
+            peak_text = got
+        else:
+            text = got
 
     data = parse_ebur_metadata(text)
     if not data["t"]:
         raise RuntimeError("ebur128 没有产出任何帧（可能没有音频流）")
+    data.update(parse_peak_metadata(peak_text))
 
     info = probe(path)
     payload: dict[str, Any] = {
@@ -673,7 +809,7 @@ def loudness_timeline(path: Path, *, force: bool = False,
         "duration": info.duration,
         "sampleRate": info.sample_rate,
         "channels": info.channels,
-        "hz": 10,
+        "hz": EBUR_HZ,
         "cached": False,
         **data,
     }
@@ -681,7 +817,57 @@ def loudness_timeline(path: Path, *, force: bool = False,
         cached.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     except Exception:
         pass
+
+    # ---- 削波时段：用**逐帧采样峰值**，不用 ebur128 那个 running max ----
+    #
+    # 判据：`Peak_level >= 0 dBFS` —— 采样值顶到满刻度，就是真削波。
+    # ⚠ 与最初写的"TruePeak > 0 dB"有出入：**逐帧真峰值拿不到**（ebur128 只给
+    # "到当前为止的最大值"，实测序列单调不减），拿它定位时段会把第一次越线之后的
+    # 整首标红。真峰值仍在 `summary.truePeakMax` 与指标卡上，只是不再用来定位时段。
+    clip = _merge_runs(payload.get("peakT") or [], payload.get("peak") or [],
+                       lambda v: v >= 0.0)
+    payload["summary"]["clipSeconds"] = round(sum(b - a for a, b in clip), 1)
+    payload["summary"]["clipCount"] = len(clip)
+    payload["summary"]["clips"] = [[round(a, 2), round(b, 2)] for a, b in clip]
+    # 削波时段算完了再落一次缓存
+    try:
+        cached.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
     return payload
+
+
+def _merge_runs(ts: list[float], vals: list[float], hit,
+                gap: float = CLIP_MERGE_GAP) -> list[tuple[float, float]]:
+    """把连续满足 `hit(v)` 的帧合并成时段，**间隔小于 `gap` 的段也并起来**。
+
+    `hit` 是判据（例如 `lambda v: v >= 0.0`）。两个要点：
+
+    * 用**真实时间戳**而不是下标 —— 时间线并不从 0 开始（`S` 有 3 秒窗口预热，
+      那几帧是静音底，解析时就丢了）。
+    * **必须再并一次**：逐帧峰值是 46.8fps，一次削波里夹一两帧没顶满就会断成两段。
+      实测 `ariiol - REK421.flac` 不并是 **260 段、绝大多数只有 21ms**；并成
+      0.25s 以上才算"一个削波段落"，图上才是几段粗红线而不是一把梳子。
+    """
+    runs: list[tuple[float, float]] = []
+    start: int | None = None
+    for i, v in enumerate(vals):
+        if hit(v):
+            if start is None:
+                start = i
+        elif start is not None:
+            runs.append((ts[start], ts[i - 1]))
+            start = None
+    if start is not None and ts:
+        runs.append((ts[start], ts[-1]))
+
+    merged: list[list[float]] = []
+    for a, b in runs:
+        if merged and a - merged[-1][1] <= gap:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    return [(a, b) for a, b in merged]
 
 
 # ametadata 输出里我们要的键 → 结果里的字段名。
@@ -691,8 +877,102 @@ _EBUR_KEYS = {
     "lavfi.r128.S": "S",
     "lavfi.r128.I": "I",
     "lavfi.r128.LRA": "LRA",
+    # LRA.low / LRA.high 是那个拐点的上下界。**不能只信 LRA 这一条序列**：
+    # 实测（见 tests/dsh-wheel/debug_parse.py）常量正弦的 LRA 序列里会夹着成对的
+    # 伪值 20.000 —— `[... 0, 0, 20.000, 20.000, 20.000, 20.000, 0, 0 ...]`，
+    # 而同一帧的 low/high 都是 -41.080（真值 0.0）。取"末值"或"最大非零值"都会
+    # 拿到那个 20。用 high - low 反算才对得上 ebur128 自己 stderr Summary 的 LRA。
+    "lavfi.r128.LRA.low": "LRAlow",
+    "lavfi.r128.LRA.high": "LRAhigh",
     "lavfi.r128.true_peak": "truePeak",
+    # 也是线性幅度。逐帧看它没意义（每帧重复同一个累计汇总值），
+    # 只在 `parse_ebur_metadata` 里取最大值当汇总用 —— 见 summary.samplePeak。
+    "lavfi.r128.sample_peak": "samplePeak",
 }
+
+# ⚠ `lavfi.r128.true_peak` / `sample_peak` 是**线性幅度**，不是 dB。
+#
+# 实测（ffmpeg 9.0.2，997Hz 正弦，48kHz pcm_s24le，见 tests/dsh-wheel/verify_units.py）：
+#
+#     输入电平    ametadata 值    ebur128 stderr    20*log10(值)
+#     -20 dB      0.009          -41.1 dBFS        -40.92
+#     -10 dB      0.028          -31.1 dBFS        -31.06
+#       0 dB      0.088          -21.1 dBFS        -21.11
+#
+# 三个点严格成 10^(-dB/20)，**确认是线性幅度**。而 ebur128 写在 stderr 的 Summary
+# 里那一份是已经转好的 dBFS。
+#
+# 踩过的坑：以前直接把元数据值当 dBTP 用，于是一首 -21.1 dBFS 的素材会报
+# `truePeakMax = 0.1"dBTP"`、`PLR = 21.2`（真值 0.0）。**而且横轴"爆音处
+# TruePeak > 0 dB"的判定会永远不触发** —— 线性幅度取到的永远是 0~1。
+#
+# 这里用 20*log10 自己转，而不是去解析 stderr：`runner.run` 目前不保留 stderr 全量，
+# 且 Summary 的格式随 ffmpeg 版本变；而 AVOption 字段名是稳定的。
+_LINEAR_FLOOR = 10.0 ** (SILENCE_LUFS / 20.0)      # 1e-6，别再低了
+
+
+def _to_db(linear: float) -> float:
+    """线性幅度 → dB。0 或负值（= 没测到）钳到 `SILENCE_LUFS` 底。"""
+    if linear <= _LINEAR_FLOOR:
+        return SILENCE_LUFS
+    return 20.0 * math.log10(linear)
+
+
+#: astats 逐帧峰值那一趟的键名。
+_ASTATS_PEAK = "lavfi.astats.Overall.Peak_level"
+
+
+def parse_peak_metadata(text: str) -> dict:
+    """解析 astats 那一趟 → **逐帧采样峰值**（dBFS），带自己的时间轴。
+
+    为什么要它：ebur128 的 `true_peak` / `sample_peak` 是**到当前为止的最大值**
+    （实测序列单调不减），拿它判"哪一刻爆音"会把第一次越线之后的整首标红。
+    `astats=metadata=1:reset=1` 给的才是逐帧值。
+
+    ⚠ 时间基与 ebur128 那趟**不一样**：ebur128 每 100ms 出一个点（10Hz），
+    astats 每个音频帧出一个（1024 样本 @48k ≈ 46.8Hz）。所以这里返回独立的
+    `peakT`，别跟 `t` 混用。
+    """
+    ts: list[float] = []
+    vals: list[float] = []
+    cur_t: float | None = None
+    for line in text.splitlines():
+        line = line.strip()
+        # ⚠ `pts_time` **不在行首**：那一行长这样
+        #     `frame:0    pts:0       pts_time:0`
+        # 所以必须用 `in` 判断（第一版写成 `startswith("pts_time:")`，
+        # 结果一帧都解析不出来 —— peak 序列长度 0，图上永远没有爆音段）。
+        if "pts_time:" in line:
+            try:
+                cur_t = float(line.split("pts_time:", 1)[1].strip())
+            except ValueError:
+                cur_t = None
+        elif line.startswith(_ASTATS_PEAK + "=") and cur_t is not None:
+            try:
+                vals.append(round(float(line.split("=", 1)[1]), 2))
+                ts.append(round(cur_t, 3))
+            except ValueError:
+                pass
+    return {"peakT": ts, "peak": vals}
+
+
+def _percentile(values: list[float], pct: float) -> float:
+    """线性插值百分位。`pct` 取 0~100。空列表返回 0.0。
+
+    用线性插值而不是"取第 k 个"，是为了让结果随序列连续变化 —— 直接取序数
+    在 10Hz 的 3 秒窗序列上会跳变（相邻两帧就可能跨过一个整数序号）。
+    """
+    if not values:
+        return 0.0
+    xs = sorted(values)
+    if len(xs) == 1:
+        return xs[0]
+    pos = (len(xs) - 1) * max(0.0, min(100.0, pct)) / 100.0
+    lo = math.floor(pos)
+    hi = math.ceil(pos)
+    if lo == hi:
+        return xs[int(pos)]
+    return xs[lo] + (xs[hi] - xs[lo]) * (pos - lo)
 
 
 def parse_ebur_metadata(text: str) -> dict:
@@ -709,6 +989,16 @@ def parse_ebur_metadata(text: str) -> dict:
     它是"门限还没积累到样本"的产物，不是真的这么安静。留着会让曲线开头
     掉到谷底，`max(M)` 倒是不受影响（-120 比谁都小），但画出来很难看。
     `I` **不剔除**：它的左端天然偏低是标准行为，指标卡取的是末值（报告 §5.5）。
+
+    **单位**（这条是踩过坑的，改之前先看 `_to_db` 上面那段实测）：
+    `lavfi.r128.true_peak` 是**线性幅度**，不是 dBTP。返回的 `truePeak` 序列与
+    `summary.truePeakMax` 都已经转成 dB，可以直接当 dBTP 用。
+    `M` / `S` / `I` / `LRA` 本来就是 LUFS/LU，不动。
+
+    返回的 `summary` 里现在有 9 项：`integrated` / `lra` / `dra` / `plr` /
+    `momentaryMax` / `shortTermMax` / `truePeakMax` / `samplePeakMax`。
+    没有 `samplePeak` 逐帧序列 —— `ametadata` 每帧重复打印同一个累计汇总值，
+    存成序列纯属浪费，所以它只出现在 `summary` 里。
     """
     t: list[float] = []
     series: dict[str, list[float]] = {v: [] for v in _EBUR_KEYS.values()}
@@ -777,104 +1067,125 @@ def parse_ebur_metadata(text: str) -> dict:
         vals = [x for x in series.get(name, []) if x > SILENCE_LUFS]
         return round(max(vals), 1) if vals else 0.0
 
-    integrated = round(series["I"][-1], 1) if series["I"] else 0.0
-    true_peak = _max("truePeak")
-    m_max, s_max = _max("M"), _max("S")
-    lra_vals = [x for x in series.get("LRA", []) if x > 0]
-    lra = round(lra_vals[-1], 1) if lra_vals else 0.0
+    def _max_linear(name: str) -> float:
+        """线性幅度序列取最大值（**不**和 `SILENCE_LUFS` 比 —— 那是 dB 的门槛）。
 
-    return {
+        全部无效（序列为空 / 全是 0）时返回 0.0，交给 `_to_db` 钳到底。
+        """
+        vals = [x for x in series.get(name, []) if x > 0.0]
+        return max(vals) if vals else 0.0
+
+    integrated = round(series["I"][-1], 1) if series["I"] else 0.0
+    # ⚠ 峰值的 max 必须**在转 dB 之前**做，而且要在**线性**序列上做。
+    # 踩过：先 `[round(_to_db(x), 2) for x in series["truePeak"]]` 再 `_max`，
+    # 等于在**已四舍五入的 dB 值**上排名 —— 而且序列里混着静音底的 -120，
+    # `_max` 拿 `x > SILENCE_LUFS` 过滤（那是 dB 门槛）就把整条序列滤空了，
+    # 结果 `truePeakMax` 变成 0.0。线性序列要用 `_max_linear`。
+    true_peak = round(_to_db(_max_linear("truePeak")), 1)
+    m_max, s_max = _max("M"), _max("S")
+
+    # LRA：用最后一帧的 high − low 反算，**不从 LRA 序列里取值**。
+    # 理由见 `_EBUR_KEYS` 里那段 —— LRA 序列夹着 20.000 的伪值。
+    # 末帧而不是全序列，因为 low/high 是随门限积累逐步收敛的累计量。
+    lra = 0.0
+    if series["LRAlow"] and series["LRAhigh"]:
+        lra = round(series["LRAhigh"][-1] - series["LRAlow"][-1], 1)
+
+    # DRA = 短时响度（3s 窗）序列的 P95 − P10，单位 LU。
+    #
+    # 与 LRA 的区别：LRA 由 libebur128 按 EBU Tech 3342 算，带**相对门限**
+    # （低于"整体响度 −10 LU"的段落不计入）；DRA 这里是**不带门限**的朴素
+    # 百分位散布，口径更直白，数值通常略大于 LRA。两者**不可互换**，所以都留着。
+    #
+    # 判据用 `SILENCE_LUFS` 底（而不是像 LRA 那样卡 > 0）：短时窗是 3 秒，
+    # 开头的 -120.691 是"窗还没填满"的产物，本来就该按底噪算，正好落在 P10 以下
+    # 被百分位自然排除，不影响 P95。
+    s_vals = [x for x in series.get("S", []) if x > SILENCE_LUFS]
+    dra = round(_percentile(s_vals, 95) - _percentile(s_vals, 10), 1) if s_vals else 0.0
+
+    # 采样峰值（dBFS）。同样是线性幅度 → dB。
+    # `peak=sample+true` 时 ebur128 每帧都会带上它，所以**不需要另跑一趟 `astats`**
+    # （AI 那份测量文档第 2.5 节建议额外跑 astats，实测是多余的：
+    #  同一 24-bit 文件 ebur128 的 sample_peak 与 astats 的 Peak level 一致）。
+    sample_peak = round(_to_db(_max_linear("samplePeak")), 1)
+
+    out = {
         "t": [round(x, 2) for x in t],
+        # M 保持 1 位：它只用来画包络/取峰值，0.1 LU 足够，而 10Hz 下密集存储很贵。
         "M": [round(x, 1) for x in series["M"]],
-        "S": [round(x, 1) for x in series["S"]],
+        # ⚠ S 保留 **2 位**，不放宽不行。短时响度是"动态模式"（DRP）那条算法的
+        # 基础曲线，要**求导**。实测（tests/dsh-wheel/probe_drp_span.py）：
+        # 1 位小数在 10Hz 上做中心差分（除 0.2s），0.1 LU 的台阶变成 0.5 LU/s 一格，
+        # 整条曲线的 |dS/dt| **只有 13 个不同取值** —— 撑不起"行为特征相近"的判定。
+        # 放到 2 位后台阶变 0.05 LU/s，取值数上一档。
+        # 代价：缓存 JSON 变大（实测这条 2325 帧的素材 +约 9KB）。
+        "S": [round(x, 2) for x in series["S"]],
         "I": [round(x, 1) for x in series["I"]],
-        "truePeak": [round(x, 2) for x in series["truePeak"]],
+        # dB，不是线性幅度（见上面 `_to_db` 那段实测）
+        "truePeak": [round(_to_db(x), 2) for x in series["truePeak"]],
         "summary": {
             "integrated": integrated,          # INTEGRATED (LUFS)
             "lra": lra,                        # LOUDNESS RANGE (LU)
+            "dra": dra,                        # 平均动态 P95−P10 (LU)
             # AVERAGE DYNAMICS (PLR) = I − true_peak。报告 §1.3 用它做过自洽性校验
             "plr": round(abs(integrated - true_peak), 1),
             "momentaryMax": m_max,
             "shortTermMax": s_max,
-            "truePeakMax": true_peak,
+            "truePeakMax": true_peak,          # dBTP
+            "samplePeakMax": sample_peak,      # dBFS
         },
         "frames": len(t),
     }
 
+    # ---- 动态模式（DRP）：接线进 summary ----
+    #
+    # 放在最后：它比前面几项贵得多（8s 窗 1s 步滑过全曲 + 凝聚式聚类），而且
+    # **结果要进缓存** —— 所以只在这一趟里算一次，命中缓存就不再算。
+    # 阈值（窗 8s / 步 1s / 容差 0.75 LU / 0.15 LU/s）只在一首素材上调过，
+    # 见 tests/dsh-wheel/README.md 的 "Measured vs assumed"。
+    #
+    # ⚠ 这里**不能静默吞异常**。第一版写的是 `except Exception: pats = []`，而
+    # `out["hz"]` 当时根本不存在（`hz` 是外层 payload 才加的）—— KeyError 被吞掉，
+    # 结果"这首歌没有动态模式"，看起来像算法结论，其实是接线错误。
+    # 现在失败会把原因写进 `summary.drpError`，一眼能看见。
+    drp_err = ""
+    try:
+        pats = drp.patterns(out["S"], out["t"], EBUR_HZ)
+    except Exception as e:                                     # noqa: BLE001
+        pats, drp_err = [], f"{type(e).__name__}: {e}"
+    pmax, pmin = drp.extremes(pats)
+    occ = [{"start": o["start"], "end": o["end"], "pattern": int(p["id"][3:])}
+           for p in pats for o in p["occurrences"]]
+    occ.sort(key=lambda o: o["start"])
+    out["summary"].update({
+        # 卡片上直接显示的三条（已经是给人看的字符串，渲染器不再加工）。
+        # 措辞取短：动态卡只有 200pt 宽，标签「动态模式 DRP」就占掉 ~75pt，
+        # 值只剩 ~95pt —— `4 个模式 / 10 次出现`那种长句会被截掉。
+        "drp": (f"{len(pats)} 模式 / {len(occ)} 次" if pats else "—"),
+        "pmax": (f"{pmax['id']} · {pmax['dr']:.2f} LU" if pmax else "—"),
+        "pmin": (f"{pmin['id']} · {pmin['dr']:.2f} LU" if pmin else "—"),
+        # 数值版，给测试与后续统计用
+        "drpCount": len(pats),
+        "drpOccurrenceCount": len(occ),
+        # 时间带画 `PT_X` 行用；空列表 = 不出那一行
+        "drpOccurrences": occ,
+        # 空字符串 = 正常。非空说明 DRP 那一步炸了（不要静默）
+        "drpError": drp_err,
+    })
+    return out
 
-# ================================================================ 响度总览图（PNG）
+
+# ================================================================ 字体
 #
-# 规格全部来自 `响度总览图（LoudnessAnalysis）实现构想.md`（那篇是对原图
-# `target/LoudnessAnalysis.svg` 的逐像素逆向 + 本机 ffmpeg 实测）。**别在这里
-# 重新发明参数** —— 尤其 `AXIS_Y`：纵轴是**非线性**的，-23~-27 这个"有效响度区"
-# 被放大了约 2.9 倍，用一个线性 dB→y 公式画出来的形状跟原图对不上（§1.6）。
+# ⚠ 这里**只剩字体挑选**了。`render_loudness_png` + `AXIS_Y` + `LOUD_COLORS` +
+# `PNG_*` 那整套 **2026-10 已退役** —— 图改成 SVG（`backend/loudness_svg.py`），
+# 版式与纵轴分别读 `backend/chart_layout.py` 与 `backend/chart_axis.py`。
+# 退役理由：① 那个 `AXIS_Y` 来自已作废的逆向文档（`-13 → -54`、`-23~-27` 放大 2.9 倍），
+# 实测真值是 `0 → -54` 线性；② 它的版面（8 张 footer 卡、含 PLR 与两个 DIAL）按新规格
+# 是作废设计；③ 两个渲染器必然漂移。要找回旧实现：`git log -- backend/audio.py`。
+#
+# 保留字体助手是因为 `tests/dsh-wheel/axis_options.py` 的对比图还在用 `_pick_font`。
 
-# LUFS → 相对绘图区顶部的比例（0=顶，1=底）。**必须分段插值**。
-AXIS_Y: tuple[tuple[float, float], ...] = (
-    (-13, 90), (-18, 253), (-23, 342), (-27, 597),
-    (-36, 784), (-45, 1141), (-54, 1489),
-)
-
-LOUD_COLORS = {
-    "bg": "#FFFFFF",
-    "body": "#A8C0D8",        # 蓝体：主色块（向下填充到图底）
-    "head": "#D89890",        # 红带：叠在蓝体之上，只在响处隆起
-    "refLine": "#F2B84B",     # 参考线（默认 -23 LUFS）
-    "grid": "#E4E7EA",        # 网格线（原图 #F7F7F7 在白底上看不见，压深一点）
-    "separator": "#CACECF",   # 绘图区与 footer 之间的横向分隔线
-    "text": "#1E1F23",
-    "muted": "#8A9099",
-}
-
-# 版面（像素）。**比例按 §3.3**：整图约 6.6:1，绘图区约 1:1.07。
-PNG_W = 2400
-PNG_H = 430
-# 宽度下限：再小就装不下 8 张指标卡（而放开下限又会让版面比例失真）。
-MIN_PNG_W = 1200
-PNG_PAD_L = 96            # 左侧留刻度文字
-PNG_PAD_R = 28
-PNG_PAD_T = 34
-PNG_FOOTER_H = 88
-
-
-def _axis_frac(lufs: float) -> float:
-    """LUFS → 绘图区内的比例（0=顶=最响，1=底=最轻）。分段线性插值。
-
-    超出控制点范围就**夹住**（不是外推）：`-54` 以下没有刻度含义，
-    外推会把静音底（-120）画到一个荒唐的位置。
-    """
-    pts = AXIS_Y
-    if lufs >= pts[0][0]:
-        lo, hi = pts[0], pts[1]
-    elif lufs <= pts[-1][0]:
-        lo, hi = pts[-2], pts[-1]
-    else:
-        lo, hi = pts[-1], pts[-2]
-        for i in range(len(pts) - 1):
-            if pts[i][0] >= lufs >= pts[i + 1][0]:
-                lo, hi = pts[i], pts[i + 1]
-                break
-    span_v = lo[0] - hi[0]
-    if span_v <= 0:
-        return 0.0
-    t = (lo[0] - max(min(lufs, lo[0]), hi[0])) / span_v
-    y0, y1 = lo[1], hi[1]
-    raw = y0 + (y1 - y0) * t
-    # 归一化到 0..1（用整轴跨度）
-    top, bot = pts[0][1], pts[-1][1]
-    return max(0.0, min(1.0, (raw - top) / (bot - top)))
-
-
-def _lufs_ticks() -> list[float]:
-    """刻度值（原图是 -13/-18/-23/-27/-36/-45/-54，**等距的是屏幕位置不是值**）。"""
-    return [p[0] for p in AXIS_Y]
-
-
-# 图表文字。**按顺序找第一个装得上的**：
-#   · 标题带文件名，中文/日文都可能出现 —— 得试系统 CJK 字体
-#   · 刻度与指标全是 ASCII，DejaVu（PIL 自带）就够
-# 实测踩过：只用 DejaVu 时中文标题会画成一个个方块。所以标题**找不到
-# CJK 字体就退回 ASCII 兜底**（`_ascii_title`），绝不留方块。
 _ASCII_FONTS = ("DejaVuSans-Bold.ttf", "DejaVuSans.ttf", "arial.ttf")
 _CJK_FONTS = ("msyh.ttc", "msyhbd.ttc", "simhei.ttf", "meiryo.ttc",
               "YuGothM.ttc", "NotoSansCJK-Regular.ttc")
@@ -897,217 +1208,6 @@ def _pick_font(size: int, *, need_cjk: bool = False):
         return ImageFont.load_default()
 
 
-def _ascii_title(s: str) -> str:
-    """把标题里的非 ASCII 字符换成 `?`（**只在拿不到 CJK 字体时用**）。
-
-    `?` 比一个个"豆腐块"诚实：方块看起来像渲染坏了，`?` 一眼就知道是编码兜底。
-    """
-    return "".join(ch if ord(ch) < 128 else "?" for ch in s)
-
-
-def _fmt_lufs(v: float | None) -> str:
-    return "—" if v is None else f"{v:.1f}"
-
-
-def _resample_columns(ts: list[float], vals: list[float], ncols: int,
-                      duration: float) -> list[float | None]:
-    """按目标列数重采样（**段内取最大值**，不是平均 —— §2.3）。
-
-    平均会把瞬时峰值削平，而这张图的意义就是"看峰值在哪"。
-    静音底（`-120.x`，§5.4）先剔掉，否则曲线开头会掉到谷底、
-    `max()` 统计也被污染。
-    """
-    if not ts or not vals or duration <= 0 or ncols <= 0:
-        return [None] * max(0, ncols)
-    out: list[float | None] = [None] * ncols
-    for t, v in zip(ts, vals):
-        if v is None or v <= SILENCE_LUFS + 1.0:       # 静音底，不是数据
-            continue
-        i = int(t / duration * ncols)
-        if i < 0:
-            i = 0
-        elif i >= ncols:
-            i = ncols - 1
-        cur = out[i]
-        if cur is None or v > cur:                     # 段内最大值
-            out[i] = v
-    return out
-
-
-def render_loudness_png(data: dict, *, title: str = "",
-                        ref_lufs: float = -23.0,
-                        high_lufs: float | None = None,
-                        width: int = PNG_W) -> bytes:
-    """把一份 `loudness_timeline()` 的结果画成 **PNG**（路线 B，§6）。
-
-    `high_lufs` 是"红带"的下界 —— 高于它的部分算"较响"。
-    §8.1 说原图的红带语义与字面指标对不齐，建议先定成
-    「瞬时响度高于某阈值的部分」并**做成可配**；缺省取
-    `Integrated + LRA/2`（响度范围的上半段），这是能从数据里推出来的、
-    有明确含义的口径，而不是拍一个常数。
-
-    返回 PNG 字节（调用方落盘）。**纯 PIL 绘制**：不依赖浏览器、
-    不依赖系统中文字体、结果是确定性的（同一份数据两次渲染逐字节相同）。
-
-    `width` 按**同一套版面比例**缩放（整图 6.6:1）。这不是"拉伸位图"，
-    而是重新算一遍所有坐标 —— 放大会更清晰，缩小也不会糊。
-    """
-    from PIL import Image, ImageDraw
-
-    # 版面按目标宽度等比缩放（所有像素常量都乘同一个系数）
-    #
-    # ⚠ 三个"下限"都会**破坏比例**，而"按比例重排"正是这个参数的卖点：
-    #   · footer 单独设下限（曾写 60px）→ 小宽度下 footer 占比抬高，
-    #     实测 800px 时比例从 5.58 掉到 4.0
-    #   · 高度设下限（曾写 200px）→ 同上，800px 时高度被抬到 200
-    # 所以现在**只限制宽度下限**：宽度够大，高度自然落在合理区间
-    # （1200px 宽 → 215px 高，footer 字号仍有 ~10px，看得清）。
-    W = max(MIN_PNG_W, min(8000, int(width)))
-    k = W / PNG_W
-    H = int(round(PNG_H * k))
-    pad_l = max(52, int(round(PNG_PAD_L * k)))
-    pad_r = max(14, int(round(PNG_PAD_R * k)))
-    pad_t = max(16, int(round(PNG_PAD_T * k)))
-    footer_h = int(round(PNG_FOOTER_H * k))
-    fs = max(11, int(round(k * 20)))
-
-    summary = (data.get("summary") or {})
-    ts = data.get("t") or []
-    mv = data.get("M") or []
-    duration = float(data.get("duration") or 0.0)
-    if duration <= 0 and ts:
-        duration = float(ts[-1]) or 1.0
-
-    img = Image.new("RGB", (W, H), LOUD_COLORS["bg"])
-    d = ImageDraw.Draw(img)
-    f_tick = _pick_font(fs)
-    f_small = _pick_font(max(10, int(fs * 0.9)))
-    f_label = _pick_font(max(10, int(fs * 0.85)))
-    f_val = _pick_font(int(fs * 1.3))
-    f_title = _pick_font(int(fs * 1.1))
-
-    plot_l = pad_l
-    plot_r = W - pad_r
-    plot_t = pad_t
-    plot_b = H - footer_h - int(round(26 * k))
-    plot_w = plot_r - plot_l
-    plot_h = plot_b - plot_t
-    if plot_w <= 10 or plot_h <= 10:
-        raise RuntimeError("画布太小，无法绘制")
-
-    # ---- 1) 网格线 + 左轴刻度（**非等距**）----
-    for lufs in _lufs_ticks():
-        y = plot_t + _axis_frac(lufs) * plot_h
-        d.line([(plot_l, y), (plot_r, y)], fill=LOUD_COLORS["grid"], width=1)
-        txt = f"{lufs:g}"
-        bb = d.textbbox((0, 0), txt, font=f_tick)
-        d.text((plot_l - int(round(12 * k)) - (bb[2] - bb[0]), y - (bb[3] - bb[1]) / 2 - bb[1]),
-               txt, font=f_tick, fill=LOUD_COLORS["muted"])
-    # 单位放在**刻度列上方、绘图区之内**：放到绘图区外面（`plot_t - 24`）
-    # 会和标题抢同一行（标题起点也是 `PNG_PAD_L`），实测两者直接叠在一起。
-    d.text((plot_l - int(round(62 * k)), plot_t + 4), "LUFS", font=f_small,
-           fill=LOUD_COLORS["muted"])
-
-    # ---- 2) 参考线（橙色，默认 -23）----
-    ref_y = plot_t + _axis_frac(ref_lufs) * plot_h
-    d.line([(plot_l, ref_y), (plot_r, ref_y)], fill=LOUD_COLORS["refLine"], width=2)
-    d.text((plot_r - int(round(62 * k)), ref_y - 22), f"{ref_lufs:g}", font=f_small,
-           fill=LOUD_COLORS["refLine"])
-
-    # ---- 3) 蓝体 + 4) 红带 ----
-    # 每列一个最大值（段内最大），从响度曲线**向下填充到图底**
-    cols = max(1, min(plot_w, int(round(1200 * k))))
-    series = _resample_columns(ts, mv, cols, duration)
-    integrated = summary.get("integrated")
-    lra = summary.get("lra") or 0.0
-    if high_lufs is None:
-        base = integrated if isinstance(integrated, (int, float)) else -23.0
-        high_lufs = base + float(lra) / 2.0
-
-    def col_x(i: int) -> int:
-        return plot_l + int(i * plot_w / cols)
-
-    head_pts: list[tuple[int, int]] = []
-    body_pts: list[tuple[int, int]] = []
-    for i, v in enumerate(series):
-        if v is None:
-            continue
-        x = col_x(i)
-        y = plot_t + _axis_frac(v) * plot_h
-        y = max(plot_t, min(plot_b, y))
-        body_pts.append((x, y))
-        hy = plot_t + _axis_frac(max(v, high_lufs)) * plot_h
-        head_pts.append((x, max(plot_t, min(plot_b, hy))))
-    if body_pts:
-        # 蓝体：折线 + 向下闭合成多边形
-        poly = body_pts + [(body_pts[-1][0], plot_b), (body_pts[0][0], plot_b)]
-        d.polygon(poly, fill=LOUD_COLORS["body"])
-    if head_pts:
-        # 红带：`M` 与"较响阈值"之间的窄带（阈值线在 M 之下时带宽为 0）
-        band = head_pts + [(x, y) for x, y in reversed(body_pts)]
-        if len(band) >= 3:
-            d.polygon(band, fill=LOUD_COLORS["head"])
-
-    # ---- 5) 时间刻度（按时长自动选步长，刻度数落在 20~45，§1.4）----
-    step = 7
-    for cand in (5, 7, 10, 15, 30, 60, 120, 300):
-        if 20 <= duration / cand <= 45:
-            step = cand
-            break
-    else:
-        step = max(1, int(duration / 30) or 1)
-    tk = 0
-    while tk * step <= duration:
-        sec = tk * step
-        x = plot_l + int(sec / duration * plot_w) if duration else plot_l
-        d.line([(x, plot_b), (x, plot_b + int(round(6 * k)))], fill=LOUD_COLORS["separator"], width=1)
-        label = _mmss(sec)
-        bb = d.textbbox((0, 0), label, font=f_small)
-        d.text((x - (bb[2] - bb[0]) / 2, plot_b + int(round(9 * k))), label, font=f_small,
-               fill=LOUD_COLORS["muted"])
-        tk += 1
-
-    # ---- 6) 分隔线 ----
-    sep_y = H - footer_h
-    d.line([(0, sep_y), (W, sep_y)], fill=LOUD_COLORS["separator"], width=2)
-
-    # ---- 7) footer：指标卡 ----
-    # §8.3：原图两个 DIAL 显示 `-`（未启用），这里**保留占位**而不是省略 ——
-    # 省略会让每张卡的宽度与位置都变，看起来像另一种排版。
-    cards = [
-        ("INTEGRATED", _fmt_lufs(summary.get("integrated")), "LUFS"),
-        ("LRA", _fmt_lufs(summary.get("lra")), "LU"),
-        ("DIAL I", "—", ""),
-        ("DIAL LRA", "—", ""),
-        ("PLR", _fmt_lufs(summary.get("plr")), "dB"),
-        ("MOMENTARY MAX", _fmt_lufs(summary.get("momentaryMax")), "LUFS"),
-        ("SHORT-TERM MAX", _fmt_lufs(summary.get("shortTermMax")), "LUFS"),
-        ("TRUE PEAK MAX", _fmt_lufs(summary.get("truePeakMax")), "dBTP"),
-    ]
-    inner_l = int(round(40 * k))
-    inner_r = W - int(round(40 * k))
-    cw = (inner_r - inner_l) / len(cards)
-    for i, (label, val, unit) in enumerate(cards):
-        cx = inner_l + i * cw
-        d.text((cx, sep_y + int(round(14 * k))), label, font=f_label, fill=LOUD_COLORS["muted"])
-        vtxt = f"{val} {unit}".strip()
-        d.text((cx, sep_y + int(round(38 * k))), vtxt, font=f_val, fill=LOUD_COLORS["text"])
-
-    # ---- 标题（左边距那块留白正好放它）----
-    # 标题带文件名，可能是中日文 —— 单独挑字体，拿不到就退回 ASCII 兜底，
-    # 绝不留"豆腐块"（那看起来像渲染坏了）。
-    if title:
-        tf = _pick_font(int(fs * 1.1), need_cjk=True)
-        text = title[:80]
-        if tf is None:
-            tf = f_title
-            text = _ascii_title(text)
-        d.text((pad_l, int(round(6 * k))), text, font=tf,
-               fill=LOUD_COLORS["text"])
-
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    return buf.getvalue()
 
 
 def render_loudness_markdown(entries: list[dict], *, detail: str = "summary",                             time_points: int = 5, frame_table: bool = False,
@@ -1134,24 +1234,41 @@ def render_loudness_markdown(entries: list[dict], *, detail: str = "summary",   
         A(f"> 生成时间：{generated_at}　·　共 {n} 个文件")
         A("")
     A("指标说明：**Integrated** 是整曲的整合响度（LUFS，带门限）；"
-      "**LRA** 是响度范围（LU）；**PLR** 是平均动态（`|I − 真峰值|`）；"
-      "**瞬时/短时**分别是 400ms / 3s 窗的最大值；**真峰值**按 BS.1770 做 4 倍过采样。")
+      "**LRA** 是响度范围（LU，EBU Tech 3342 带门限）；"
+      "**DRA** 是平均动态（LU，短时响度的 P95−P10，**不带门限**）；"
+      "**PLR** 是平均动态（`|I − 真峰值|`）；"
+      "**瞬时/短时**分别是 400ms / 3s 窗的最大值；"
+      "**真峰值**按 BS.1770 做 4 倍过采样，**采样峰值**不过采样。")
+    A("")
+    A("> `LRA` 与 `DRA` 是**两个不同的量**，不要互换：前者由 libebur128 按 EBU "
+      "Tech 3342 算，会剔除低于「整体响度 −10 LU」的段落；后者是朴素的百分位散布。"
+      "同一条素材两者数值可能接近，但口径不同。")
     A("")
 
     # ---------------- 汇总表 ----------------
     A("## 汇总")
     A("")
-    A("| # | 文件 | 时长 | Integrated | LRA | PLR | 瞬时峰值 | 短时峰值 | 真峰值 | 判定 |")
-    A("|---|---|---|---|---|---|---|---|---|---|")
+    A("| # | 文件 | 时长 | Integrated | LRA | DRA | PLR "
+      "| 瞬时峰值 | 短时峰值 | 采样峰值 | 真峰值 | DRP | PMAX | PMIN | 判定 |")
+    A("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for i, e in enumerate(entries, 1):
         d = e.get("data") or {}
         s = d.get("summary") or {}
         verdict = _loudness_verdict(s.get("integrated"), ref_lufs)
         A(f"| {i} | {_md_cell(e.get('name'))} | {_mmss(d.get('duration'))} "
           f"| {_num(s.get('integrated'))} LUFS | {_num(s.get('lra'))} LU "
+          f"| {_num(s.get('dra'))} LU "
           f"| {_num(s.get('plr'))} | {_num(s.get('momentaryMax'))} "
-          f"| {_num(s.get('shortTermMax'))} | {_num(s.get('truePeakMax'))} dBTP "
+          f"| {_num(s.get('shortTermMax'))} "
+          f"| {_num(s.get('samplePeakMax'))} dBFS "
+          f"| {_num(s.get('truePeakMax'))} dBTP "
+          f"| {_md_cell(s.get('drp') or '—')} "
+          f"| {_md_cell(s.get('pmax') or '—')} "
+          f"| {_md_cell(s.get('pmin') or '—')} "
           f"| {verdict} |")
+    A("")
+    A("> `DRP` 是动态模式的「模式数 / 出现次数」；`PMAX` / `PMIN` 是动态范围最大 / "
+      "最小的那个模式的编号与它的 DR（LU）。没有检测到模式时三者都是 `—`。")
     A("")
     A(f"> 「判定」以参考目标 **{_num(ref_lufs)} LUFS** 为准（可用 `refLufs` 改）。"
       "它是**提示**，不是质量结论 —— 目标值取决于发行渠道。")
@@ -1214,10 +1331,24 @@ def render_loudness_markdown(entries: list[dict], *, detail: str = "summary",   
             A(f"- 时长：{_mmss(d.get('duration'))}　·　"
               f"帧数：{d.get('frames', 0)}（{d.get('hz', 10)} Hz）")
             A(f"- Integrated **{_num(s.get('integrated'))} LUFS**　·　"
-              f"LRA **{_num(s.get('lra'))} LU**　·　PLR **{_num(s.get('plr'))}**")
+              f"LRA **{_num(s.get('lra'))} LU**　·　DRA **{_num(s.get('dra'))} LU**　·　"
+              f"PLR **{_num(s.get('plr'))}**")
             A(f"- 瞬时峰值 **{_num(s.get('momentaryMax'))}**　·　"
               f"短时峰值 **{_num(s.get('shortTermMax'))}**　·　"
+              f"采样峰值 **{_num(s.get('samplePeakMax'))} dBFS**　·　"
               f"真峰值 **{_num(s.get('truePeakMax'))} dBTP**")
+            A(f"- 动态模式 DRP **{_md_cell(s.get('drp') or '—')}**　·　"
+              f"PMAX **{_md_cell(s.get('pmax') or '—')}**　·　"
+              f"PMIN **{_md_cell(s.get('pmin') or '—')}**")
+            if s.get("drpError"):
+                # 不静默：DRP 那一步炸了就说清楚，否则"没检测到模式"会被当成算法结论
+                A(f"  > ⚠ DRP 计算失败：`{_md_cell(s['drpError'])}`")
+            if s.get("drpOccurrences"):
+                A("")
+                A(f"**动态模式的每一次出现**（共 {len(s['drpOccurrences'])} 段）：")
+                A("")
+                for o in s["drpOccurrences"]:
+                    A(f"- `PT_{o['pattern']}`　{_mmss(o['start'])} → {_mmss(o['end'])}")
             if time_points > 0:
                 A("")
                 A(f"**最响的 {time_points} 个瞬间**（定位爆音/削波风险）：")

@@ -196,17 +196,22 @@ def availability(tail: str | None, op: str) -> tuple[bool, str]:
     写在浏览器里而不在后端兜底 = 绕过前端就绕过约束。
 
     三种状态（§3.2.4），**判据按这个顺序判，顺序本身就是语义**：
-      1. 链尾是终态（`gives='archive'`，没有任何 op 吃它）→ **不可选**
+      1. 链尾交出的是**压缩包**（`gives='archive'`）→ **可选 + 提示**：
+         压缩包不会被递给下一步，但 `zip` 什么都没改动（`mode=read`），
+         后面的步骤照旧作用于当前文件；而且一条链本来就可以有多个打包步骤
       2. `tail` 留下的是原文件，而 `op` 要的正好是另一种大类（音频↔图片）
          → **可选但强提示**：用户很可能就是想"先看一眼波形/响度图，再处理音频"，
          禁用它等于把一条正常用法判成错误
       3. `tail` 留下的是原文件，大类相同（如 `校验 → 转换`）→ **可选 + 回落提示**
       4. 其余 → 可选，无提示
 
-    ⚠ 第 1 步的判据是"有没有**任何** op 吃这个类型"，不是"这个 op 吃不吃"：
-    `提取封面 → 格式转换` 里 convert 确实吃不下图片，但用户可以无视那张图、
-    继续处理原文件 —— 硬禁掉它就把"提取封面顺便归档"这条链堵死了。
-    真正该硬禁的只有 `archive`：ZIP 之后接什么都不可能对（§3.2.3 四）。
+    ⚠ **这里不再有"硬禁"**（原来只有 `archive` 一条）。那条规则的前提是
+    "ZIP 必须在链尾"，而打包语义已经改了：一个打包步骤收集的是**它自己那个窗口**
+    里的产物（上一个打包步骤之后、它之前），所以 `转 FLAC → 打包 → 转 MP3 → 打包`
+    是合法且有用的链。详见 `执行链打包与串行交接方案.md` §4。
+
+    ⚠ 「有没有任何 op 吃这个类型」**不能**当硬禁判据：`提取封面 → 格式转换` 里
+    convert 确实吃不下图片，但用户可以无视那张图、继续处理原文件。
     """
     if op not in OPS or op not in contract.CONTRACT:
         return False, f"未知的操作：{op}"
@@ -227,20 +232,10 @@ def availability(tail: str | None, op: str) -> tuple[bool, str]:
     needs = contract.needs_of(op)
     needs_cn = "/".join(contract.GIVE_LABEL.get(n, n) for n in needs)
 
-    # 1) 终态：这个类型**没有任何** op 接得住（只可能是 archive）→ 不可选
-    #
-    # ⚠ 这一步**必须**先排除"上一步压根没打算交东西"的情况（`produce ∈ NO_HANDOFF`），
-    # 否则 `gives='none'` 会漏进下面的 `accepts` 判定：`none` 不是任何卡 `needs`
-    # 里的类型（只有汇总类 `zip` 显式收 `none`），于是"没有任何 op 接得住"成立，
-    # 整条链被误判成终态 —— 现象是「响度分析报告」之后**除打包以外全部置灰**，
-    # 而它其实是个只读分析，后面的卡片照旧读原文件就行。
-    #
-    # 这和 `compatible()` 的最后一行是**同一条规则**（都是 `produce not in NO_HANDOFF`），
-    # 两处必须一致；分叉的表现是"置灰了但后端其实允许"（前端把正常用法堵死）。
-    if not _hands_something_off(tail) and not any(
-            contract.accepts(give, other) for other in OPS):
-        return False, (f"「{tail_label}」交出的是{give_cn}，"
-                       f"没有卡片能接它，应当是链的最后一环")
+    # 1) 压缩包：可选，但必须说清"它不会被递下去"
+    if give == "archive":
+        return True, (f"「{tail_label}」交出的是压缩包，它不会被递给下一步 —— "
+                      f"后面的步骤仍然作用于当前文件")
 
     # 已经能续下去（上一步把处理结果交出来了）→ 无需提示
     if compatible(tail, op):

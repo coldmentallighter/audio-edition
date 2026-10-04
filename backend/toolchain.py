@@ -104,13 +104,19 @@ class Toolchain:
 
         import tempfile
 
-        # ignore_cleanup_errors：临时目录**删不掉**不该拖垮启动。
-        # 实测在受限环境（Windows 沙箱 / 杀软锁文件）下，TemporaryDirectory.__exit__
-        # 里的 rmtree 会抛 PermissionError，而这个异常是在 lifespan 里冒出来的 ——
-        # 结果是"探一下 metaflac"导致整个服务起不来，用户只看到一句拒绝访问。
-        # 探测的目的是"确认工具可用"，与"临时文件清理成功"无关，所以清理失败就放着。
-        with tempfile.TemporaryDirectory(prefix="ae-probe-", ignore_cleanup_errors=True) as td:
-            f = Path(td) / "probe.flac"
+        # ⚠ **不要用 `tempfile.TemporaryDirectory`**，哪怕带 `ignore_cleanup_errors=True`。
+        #
+        # 实测（Python 3.14 + Windows 受限环境）：`ignore_cleanup_errors` 只把
+        # `shutil.rmtree` 的 onexc 换成不抛的版本，而 rmtree 失败时会先走
+        # `tempfile._resetperms()`，那里面 `os.chmod` 会抛 `PermissionError:
+        # [WinError 5]`，这个异常**不在** ignore 的覆盖范围内 —— 于是从
+        # `__exit__` 冒出来。症状：探一下 metaflac 导致整个服务起不来，
+        # 用户只看到一句"拒绝访问"。删不掉临时目录与"探测工具是否可用"无关。
+        #
+        # 所以改成手工管理：正常路径自己删，删不掉就留着（系统会清）。
+        td = tempfile.mkdtemp(prefix="ae-probe-")
+        f = Path(td) / "probe.flac"
+        try:
             code, _, _ = _run([
                 ff, "-hide_banner", "-loglevel", "error", "-y",
                 "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1",
@@ -122,6 +128,11 @@ class Toolchain:
             if rc == 0:
                 return Tool("metaflac", path, "1.5.x (干跑验证通过)", True, "")
             return Tool("metaflac", path, "", False, f"干跑失败: {(err or out).strip()[:80]}")
+        finally:
+            try:
+                shutil.rmtree(td, ignore_errors=True)
+            except Exception:                            # noqa: BLE001
+                pass
 
     # ---------- 读取 ----------
 

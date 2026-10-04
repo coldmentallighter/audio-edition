@@ -270,6 +270,11 @@ def add_file(rel_path: str, *, size: int = 0, mtime: float = 0.0,
     cur = c.execute("SELECT * FROM files WHERE rel_path = ?", (rel,))
     row = cur.fetchone()
     if row:
+        # 大小/时间对不上 ⇒ 这个路径上的**内容**可能已经换了（软删除后重新导入
+        # 同名文件、或同一路径又拖进来一次）。这一步要在下面两个分支之前算好，
+        # 因为两个分支都会把 size/mtime 刷新成新值、之后就再也比不出来了。
+        same_content = (int(row["size"] or 0) == int(size)
+                        and float(row["mtime"] or 0) == float(mtime))
         # 之前被软删除过（state='deleted'）：重新导入必须让它复活。
         # 否则「从库里删掉 → 再从文件夹拖进来」会一直看不到这个文件，
         # 因为下面那句 UPDATE 刻意保留原状态。
@@ -284,6 +289,8 @@ def add_file(rel_path: str, *, size: int = 0, mtime: float = 0.0,
                 "UPDATE files SET size=?, mtime=?, updated_at=? WHERE id=?",
                 (size, mtime, t, row["id"]),
             )
+        if not same_content:
+            _forget_measurements(row["id"])
         return get_file(row["id"])                       # type: ignore[return-value]
     fid = new_id("f_")
     c.execute(
@@ -404,6 +411,55 @@ def set_file_info(fid: str, info: dict) -> None:
         " updated_at=? WHERE id=?",
         (json.dumps(info, ensure_ascii=False), now(), fid),
     )
+
+
+# 这几个 key 是**内容测量值**：只有整条流解码一遍才拿得到（响度/真峰值/响度范围/
+# 采样峰值/平均动态/动态模式），所以 `probe`（ffprobe，只读元数据，不解码）
+# **永远测不出来、也就永远刷新不了**。它们由 `h_loudness` / `h_normalize` 写，
+# 而"文件换了内容"时只能靠 `_forget_measurements` 显式丢掉 —— 留着就是**上一个文件**
+# 的数字。
+MEASUREMENT_KEYS = ("loudness", "truePeak", "loudnessRange", "samplePeak", "dra", "drp")
+
+
+def _load_info(fid: str) -> dict:
+    init_db()
+    row = _conn().execute("SELECT info FROM files WHERE id=?", (fid,)).fetchone()
+    if not row:
+        return {}
+    try:
+        cur = json.loads(row["info"] or "{}")
+    except (TypeError, ValueError):
+        cur = {}
+    return cur if isinstance(cur, dict) else {}
+
+
+def merge_file_info(fid: str, patch: dict) -> None:
+    """把 `patch` **合并**进现有 info，而不是像 `set_file_info` 那样整体覆盖。
+
+    为什么要这个入口：有些处理器只产出**一个**字段（`normalize`/`loudness` → 响度，
+    `tags`/`cover` → 重新 probe 一遍元数据），而 `set_file_info` 是整体覆盖 ——
+    直接用它会把之前测出来的响度、以及别的处理器写进去的字段一并清掉。
+    `info` 是**一个文件的一整份画像**，写它的人各有各的一块，所以按块合并。
+    """
+    cur = _load_info(fid)
+    if not cur and not patch:
+        return
+    cur.update(patch or {})
+    set_file_info(fid, cur)
+
+
+def _forget_measurements(fid: str) -> None:
+    """丢掉 `MEASUREMENT_KEYS`（响度那一组）。
+
+    用在**文件内容被换掉**的时候（软删除后重新导入同名文件、或同一路径又拖进来
+    一次）：别的字段 `probe` 会重新读、能自我纠正，而响度那组 probe 测不出来 ——
+    留着就变成"卡片上写着上一个文件的 -19.3 LUFS"，比显示 `—` 更糟。
+    """
+    cur = _load_info(fid)
+    if any(k in cur for k in MEASUREMENT_KEYS):
+        for k in MEASUREMENT_KEYS:
+            cur.pop(k, None)
+        set_file_info(fid, cur)
 
 
 def rel_path_exists(rel: str) -> bool:
@@ -872,7 +928,22 @@ def chain_snapshot(chain_id: str) -> dict[str, Any]:
         "steps": [steps[k] for k in sorted(steps)],
         "files": list(per_file.values()),
         "stepCount": len([k for k in steps if k >= 0]),
+        # 本次执行的**产物目录**（`执行链打包与串行交接方案.md` §5.3）：
+        # 让前端能显示"这次的产物在哪"，也让用户分得清两次执行。
+        "outDir": chain_out_dir(chain_id),
     }
+
+
+def chain_out_dir(chain_id: str) -> str:
+    """本次执行的产物目录（相对 `outputs/`）；没有任务时就返回空串。
+
+    目录名由 `chain_id` + 建链时间算出来（`config.run_dir_name`），
+    所以**不存在"这个目录还没建"的问题** —— 它是确定性的名字，不是"查到才存在"。
+    """
+    started = chain_started_at(chain_id)
+    if not started:
+        return ""
+    return config.run_dir_name(chain_id, started)
 
 
 def file_prev_step_state(chain_id: str, file_id: str, step_idx: int,
@@ -1132,9 +1203,10 @@ def attach_src_output(src_task_id: str, artifact_file_id: str, rel: str) -> int:
 def chain_derived_artifact(chain_id: str, file_id: str, step_idx: int) -> dict | None:
     """这个文件在这条链上、**早于 `step_idx`** 的最后一次派生产物。→ `{relPath, step, type}`。
 
-    与 `chain_final_artifact` 的区别很重要，也是"ZIP 偶发装源文件"的根治：
+    为什么"只查产物行"这么重要（这是"ZIP 偶发装源文件"的根治）：
 
-      · `chain_final_artifact` 沿着**任务行**推导（`tasks_before` → `src_output`）。
+      · 老实现（`chain_final_artifact`，已随打包语义重写删除）沿着**任务行**推导
+        （`tasks_before` → `src_output`）。
         那条路要经过"哪个任务算前置""时间戳怎么排序""回填有没有落地"好几个环节，
         任何一个差一点都会悄悄退回源文件 —— 实测表现为"同一用例跑三次，
         两次装源文件、一次装产物"。
@@ -1143,6 +1215,8 @@ def chain_derived_artifact(chain_id: str, file_id: str, step_idx: int) -> dict |
         所以"这条链、这个文件的第 i 步之前的产物"是一条**确定性的 JOIN**，
         不依赖任何"谁先跑完"的时序。产物行是权威事实（它代表磁盘上真有这个文件）。
 
+    ⚠ `h_zip` **不再用它**（打包已改成按窗口一次查全，见 `chain_zip_window`）；
+    保留是因为测试拿它断言"旁路产物也必须登记成派生产物行"（ZIP 靠这些行收集成员）。
     `file_id` 用不上（派生产物是新行），保留参数是为了调用点语义清楚。
     """
     init_db()
@@ -1159,35 +1233,129 @@ def chain_derived_artifact(chain_id: str, file_id: str, step_idx: int) -> dict |
             "step": int(r["step_idx"] or 0) + 1, "type": r["type"]}
 
 
-def chain_final_artifact(chain_id: str, file_id: str, step_idx: int,
-                         before_ts: float | None = None) -> tuple:
-    """这个文件在这条链上"最终该装进 ZIP 的东西"。→ `(路径, 来源说明)` 或 `None`。
 
-    `before_ts` 必须传当前任务的 `created_at`，否则会解算到**别的链**的旧任务
-    （见 `tasks_before` 的注释 —— 那正是"ZIP 里装的是源文件"的根因）。
+# ---------------------------------------------------------------- 打包窗口
+#
+# `执行链打包与串行交接方案.md` §4：一个打包步骤收集的是**它自己那个窗口**里的产物 ——
+# 「上一个打包步骤（不含）」到「本次打包步骤（不含）」。两种档位的内容规则不同：
+#   · 串行：每个文件取窗口内**最后一个音频产物** + 窗口内全部旁路产物
+#   · 并行：窗口内**全部**非 zip 产物
+# 下面这两个函数是窗口的**唯一实现**（`h_zip` 与调度屏障共用），
+# 别再在别处按 `step_idx` 手写一遍。
+#
+# ⚠ 这里**刻意不沿"任务行 + src_output"推导**（老实现 `chain_final_artifact` /
+# `chain_input_for` 就是那么干的，已随本次改动删除）：那条路要经过"哪个任务算前置"
+# "时间戳怎么排序""回填有没有落地"好几个环节，任何一个差一点都会**悄悄退回源文件**
+# —— 实测表现为"同一用例跑三次，两次装源文件、一次装产物"。
+# 窗口解算只认**产物行**（`files.origin='derived'`）：它天生带 `derived_from`
+# （产出它的任务），而任务带 `chain_id` / `step_idx`，所以这是一条确定性的查询，
+# 不依赖任何"谁先跑完"的时序。
+
+def chain_prev_zip_step(chain_id: str, step_idx: int) -> int:
+    """这条链上、**早于 `step_idx`** 的最后一个打包步骤；没有就 -1。"""
+    init_db()
+    r = _conn().execute(
+        "SELECT MAX(step_idx) AS s FROM tasks"
+        " WHERE chain_id=? AND type='zip' AND step_idx<?",
+        (chain_id, step_idx)).fetchone()
+    s = r["s"] if r else None
+    return -1 if s is None else int(s)
+
+
+def chain_zip_window(chain_id: str, step_idx: int) -> dict[str, Any]:
+    """打包窗口的全部事实（一次查完，给 `h_zip` 与屏障共用）。
+
+    → `{"from": 下界（含）, "to": 上界（不含）,
+         "steps":  {step_idx: {"type", "name", "aggregate"}},
+         "artifacts": [{"row_id","producing_file_id","rel_path","name",
+                        "step","type","produce"}],
+         "tasks":  [{"step_idx","file_id","type","state","src_output","ended_at"}]}`
+
+    `produce` 由**接触面**现算（`contract.produces(op_of_task(...))`）——
+    这样才能分清"这一步交出的是音频产物还是旁路产物"，而 ZIP 的两种档位
+    对这两类的取舍不同（§4.2）。
     """
-    rows = tasks_before(chain_id, step_idx, file_id, before_ts=before_ts)
-    if not rows:
-        f = get_file(file_id)
-        return (f.path, "source") if f else None
-    last = rows[0]
-    if last.state != "success":
-        return None
-    if last.src_output:
-        return (config.OUTPUTS / last.src_output, f"step{int(last.step_idx or 0) + 1}:{last.type}")
-    f = get_file(file_id)
-    return (f.path, f"step{int(last.step_idx or 0) + 1}:{last.type}") if f else None
+    from backend.cards import contract as _contract
+    from backend.cards.specs import op_of_task
+
+    init_db()
+    lo = chain_prev_zip_step(chain_id, step_idx) + 1
+    hi = int(step_idx)
+    steps: dict[int, dict[str, Any]] = {}
+    artifacts: list[dict[str, Any]] = []
+    tasks: list[dict[str, Any]] = []
+
+    for r in _conn().execute(
+        "SELECT step_idx, type, params FROM tasks"
+        " WHERE chain_id=? AND step_idx>=? AND step_idx<? ORDER BY step_idx",
+        (chain_id, lo, hi)
+    ).fetchall():
+        si = int(r["step_idx"] or 0)
+        if si in steps:
+            continue                       # 同一步的多个文件，取第一条即可
+        try:
+            params = json.loads(r["params"] or "{}")
+        except (TypeError, ValueError):
+            params = {}
+        name = str(params.get("_step_name") or "").strip()
+        op = op_of_task(str(r["type"]), params)
+        if not name:
+            # 老数据（`_step_name` 是后加的）：退回落成 op 的中文名
+            name = _op_label(op) or str(r["type"])
+        steps[si] = {"type": str(r["type"]), "name": name,
+                     "aggregate": op == "zip"}
+
+    for r in _conn().execute(
+        "SELECT f.id AS row_id, f.rel_path, f.name, t.file_id AS producing_file_id,"
+        " t.step_idx, t.type, t.params"
+        " FROM files f JOIN tasks t ON f.derived_from = t.id"
+        " WHERE f.origin='derived' AND t.chain_id=? AND t.step_idx>=? AND t.step_idx<?"
+        " ORDER BY t.step_idx",
+        (chain_id, lo, hi)
+    ).fetchall():
+        try:
+            params = json.loads(r["params"] or "{}")
+        except (TypeError, ValueError):
+            params = {}
+        op = op_of_task(str(r["type"]), params)
+        artifacts.append({
+            "row_id": r["row_id"],
+            "producing_file_id": r["producing_file_id"],
+            "rel_path": r["rel_path"],
+            "name": r["name"],
+            "step": int(r["step_idx"] or 0),
+            "type": str(r["type"]),
+            "produce": (_contract.produces(op)
+                        if op in _contract.CONTRACT else "sidecar"),
+        })
+
+    for r in _conn().execute(
+        "SELECT step_idx, file_id, type, state, src_output, ended_at FROM tasks"
+        " WHERE chain_id=? AND step_idx>=? AND step_idx<?",
+        (chain_id, lo, hi)
+    ).fetchall():
+        tasks.append({
+            "step_idx": int(r["step_idx"] or 0),
+            "file_id": r["file_id"],
+            "type": str(r["type"]),
+            "state": str(r["state"]),
+            "src_output": r["src_output"],
+            "ended_at": r["ended_at"],
+        })
+
+    return {"from": lo, "to": hi, "steps": steps,
+            "artifacts": artifacts, "tasks": tasks}
 
 
-def chain_input_for(file_id: str, chain_id: str, step_idx: int) -> TaskRow | None:
-    """这个文件在链上"最后一个产出过东西"的那一步（**含失败**）。
-
-    `h_zip` 用它决定"装什么"或"这个文件干脆不进 ZIP"（§9.7）：
-    返回的任务若 `state != 'success'`，说明链断过 → 调用方必须**跳过这个文件**，
-    既不能回落到更早的产物、也不能回落到源文件。
-    """
-    rows = tasks_before(chain_id, step_idx, file_id)
-    return rows[0] if rows else None
+def _op_label(op: str) -> str:
+    """op 的中文名（拿不到就空串 —— 宁可显示任务类型，也不要显示内部 op 名）。"""
+    if not op:
+        return ""
+    try:
+        from backend.cards.specs import OPS
+        return str((OPS.get(op) or {}).get("label") or "")
+    except Exception:                      # pragma: no cover - 兜底，不该发生
+        return ""
 
 
 def reset_stale_running() -> int:

@@ -14,7 +14,7 @@ from typing import Any, Callable
 
 from backend import config, store
 from backend.cards import boundary, contract
-from backend.cards.specs import OPS, task_params
+from backend.cards.specs import OPS, THEME_OPS, task_params
 from backend.formats import classify, is_lossless, is_lossy
 from backend.queue import new_batch_id
 
@@ -388,6 +388,20 @@ def build_chain(payload: dict) -> dict:
         # `loudness-report` / `loudness-image` 会退化成只算一遍并写缓存的 `loudness` ——
         # 任务仍然 `success`、进度 100，却什么都不产出（用户实测报的"报告不生成"）。
         params = task_params(op, step.get("params"))
+        # 主题：**链级**参数（`payload.theme` / `payload.themeMode`）落到会用到它的
+        # 那些步骤上。放链级而不是每步自己填，是因为"用户当前的主题"本来就是**整条链
+        # 的一个属性**（老板 2026-10："svg 生成的主题颜色改成用户执行链时主题的"）；
+        # 服务端注入还顺手保证了：绕过页面直接 POST 也拿得到一套确定的上色，
+        # 而步骤里显式给了值就听步骤的。
+        if op in THEME_OPS:
+            for k, v in (("theme", payload.get("theme")),
+                         ("themeMode", payload.get("themeMode"))):
+                if v is not None and k not in params:
+                    params[k] = v
+        # 这一步的**卡片名**要落库：打包的 ZIP 文件名按"对应功能卡片名称"拼
+        # （`upload-20261002-转FLAC-标准化.zip`），而任务行里只有类型没有名字。
+        # 与其他 `_` 开头的键一样，它是**服务端状态**（预设校验会剔除，客户端覆盖不了）。
+        params["_step_name"] = str(step.get("name") or spec.get("label") or op)
         step_id = store.new_id("s_")
         batch_id = new_batch_id()
         made: list[tuple[str, str]] = []          # (file_id, task_id)
@@ -446,7 +460,7 @@ def build_chain(payload: dict) -> dict:
 def chain_notes(ops: list[str], mode: str) -> list[dict]:
     """链上需要提示的位置。**只提示，不阻断**（§3.2.4）。
 
-    两个判据，对应两种"你可能不是这个意思"：
+    两个主判据，对应两种"你可能不是这个意思"：
 
       1. **并行档下的产物断链**（§2.3 的 `⇥`）：并行档不连因果边，
          所以第 i+1 步读的是**原文件**，不是第 i 步的产物。
@@ -458,6 +472,18 @@ def chain_notes(ops: list[str], mode: str) -> list[dict]:
 
     判据 1 用的是 `contract.produces(...) not in HANDOFF`，与 `_gate` 里
     "串行档才连边"是同一件事的两种视角 —— 串行档不提示，因为边真的连上了。
+
+    另外三条（都不阻断，都是"你可能不是这个意思"）：
+
+      3. **打包之后还有步骤**：压缩包不会被递下去（`gives=archive` 没人接得住），
+         但 `zip` 什么都没改动，后面的步骤照旧作用于当前文件；顺带提醒
+         "本次打包只收集到它为止的产物" —— 一条链可以有**多个**打包步骤，
+         每个收集自己那个窗口（`执行链打包与串行交接方案.md` §4）。
+      4. **就地改写排在"产出新文件"的步骤后面**（`标准化 → 改标签`）：改的是
+         `outputs/` 里的**产物**，不是 `uploads/` 里的原文件 —— 语义正确，
+         但用户看不见，不说清就会以为"原文件被改了"。
+      5. **`提取封面 → 嵌入封面`**：`cover` 的图只能来自**参数**（且必须在
+         `uploads/` 下），不会用上一步刚提取出来的那张。
     """
     notes: list[dict] = []
     for i in range(len(ops) - 1):
@@ -467,11 +493,28 @@ def chain_notes(ops: list[str], mode: str) -> list[dict]:
             la, lb = OPS[a]["label"], OPS[b]["label"]
             why = (f"并行档不传递产物：「{lb}」会作用在原文件上，"
                    f"不是「{la}」的产物（改成串行即可接上）")
+        elif a == "zip":
+            why = (f"「{OPS[b]['label']}」会作用于当前文件（压缩包不会被递下去）；"
+                   f"本次打包只收集到「{OPS[a]['label']}」为止的产物")
         elif boundary.relation(a, b) == boundary.EXCLUSIVE:
             why = (f"「{OPS[a]['label']}」与「{OPS[b]['label']}」都会改这个文件，"
                    f"最终结果取决于执行顺序")
+        elif a == "extract-cover" and b == "cover":
+            why = ("「嵌入封面」的图要在卡片里自己选（它只认 `uploads/` 下的图片），"
+                   "不会用上一步刚提取出来的那张")
         if why:
             notes.append({"stepIdx": i, "text": why})
+    # 判据 4 的提示挂在**改写那一步**上，而且要**单独扫一遍**：
+    # 上面那个循环只到 `len(ops)-1`，链尾那一步永远不会被当成"下一对"看到，
+    # 于是 `标准化 → 改标签` 这种"改写在最后一步"的常见链一条提示都没有。
+    for i in range(1, len(ops)):
+        if (contract.produces(ops[i]) == "in_place"
+                and contract.produces(ops[i - 1]) == "derived"):
+            notes.append({
+                "stepIdx": i,
+                "text": (f"「{OPS[ops[i]]['label']}」作用于上一步的**产物**"
+                         f"（`outputs/` 里的新文件），原文件不变"),
+            })
     return notes
 
 

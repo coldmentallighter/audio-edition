@@ -6,8 +6,19 @@ import json
 from fastapi import APIRouter, Body, HTTPException
 
 from backend import cards as cards_mod, logs
+from backend.cards.store import CardsFileError
 
 router = APIRouter()
+
+
+def _cards_error(e: CardsFileError) -> HTTPException:
+    """`cards.json` 读不出来 → **明确报错**，绝不装作"你没有卡片"。
+
+    为什么必须报错而不是返回空列表：用户看到空列表会以为卡片丢了、于是重新建一遍，
+    而重新建会**整份写回** —— 真丢就变成既成事实。这里让前端拿到一个能显示出来的
+    错误，盘上的文件一个字节都不动（见 `cards/store.py` 顶部那段）。
+    """
+    return HTTPException(500, {"message": str(e), "kind": "cards-file"})
 
 @router.get("/api/ops")
 def get_ops() -> dict:
@@ -29,18 +40,24 @@ def get_ops() -> dict:
 @router.get("/api/cards")
 def get_cards() -> dict:
     """内置 + 自定义卡片。custom=true 的那批可以编辑/删除。"""
-    return {
-        "cards": cards_mod.all_cards(),
-        "categories": cards_mod.CARD_CATS,
-        "snapshots": cards_mod.snapshots(),
-        "builtinCount": len(cards_mod.BUILTIN_CARDS),
-    }
+    try:
+        return {
+            "cards": cards_mod.all_cards(),
+            "categories": cards_mod.CARD_CATS,
+            "snapshots": cards_mod.snapshots(),
+            "builtinCount": len(cards_mod.BUILTIN_CARDS),
+        }
+    except CardsFileError as e:
+        raise _cards_error(e) from None
 
 
 @router.get("/api/snapshots")
 def get_snapshots() -> dict:
     """抽屉顶部那排快照（卡片名列表）。"""
-    return {"snapshots": cards_mod.snapshots(), "defaults": cards_mod.SNAPS_DEFAULT}
+    try:
+        return {"snapshots": cards_mod.snapshots(), "defaults": cards_mod.SNAPS_DEFAULT}
+    except CardsFileError as e:
+        raise _cards_error(e) from None
 
 
 @router.put("/api/snapshots")

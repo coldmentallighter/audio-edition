@@ -4,7 +4,7 @@
 app.py 与 tests 里所有 `cards.xxx` 调用都不用改：
 
     specs     参数规格（OPS / PARAM_TYPES / PICTURE_TYPES）
-    builtin   72 张内置卡片
+    builtin   71 张内置卡片
     validate  卡片校验 + 步骤校验 + 命令预览
     store     自定义卡片 / 快照 / 预设的持久化
 
@@ -12,6 +12,7 @@ app.py 与 tests 里所有 `cards.xxx` 调用都不用改：
 """
 from backend.cards.specs import OPS, PARAM_TYPES, PICTURE_TYPES
 from backend.cards.builtin import BUILTIN_CARDS, CARD_CATS, CARD_ICONS, SNAPS_DEFAULT
+from backend.cards.builtin import NO_CARD_OPS  # noqa: F401
 from backend.cards.validate import validate_card, validate_step, validate_steps, render_preview
 from backend.cards.store import (
     CARDS_JSON,

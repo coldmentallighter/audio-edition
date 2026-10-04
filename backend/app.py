@@ -18,9 +18,11 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import config, queue as q_mod, store, tasks
+from backend.cards import store as cards_store
 from backend.routers import catalog, files, ops, system as system_routes, task_queue
 from backend.toolchain import toolchain
 
@@ -87,6 +89,18 @@ app.add_middleware(
 for _r in (system_routes.router, catalog.router, files.router,
            task_queue.router, ops.router):
     app.include_router(_r)
+
+
+@app.exception_handler(cards_store.CardsFileError)
+async def _cards_file_error(_request, exc: cards_store.CardsFileError):
+    """`cards.json` 读不出来 → 500 + 人话，**绝不静默当成"你没有卡片"**。
+
+    全局注册而不是逐个端点包：卡片文件被 CRUD / 快照 / 预设三条路径读写，
+    漏掉任何一个都等于漏掉一次"把用户卡片写没"的机会。
+    见 `backend/cards/store.py` 顶部那段（老板问"卡片怎么一直消失"）。
+    """
+    return JSONResponse(status_code=500,
+                        content={"detail": {"message": str(exc), "kind": "cards-file"}})
 
 
 # ================================================================ 静态前端

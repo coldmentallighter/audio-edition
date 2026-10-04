@@ -347,6 +347,65 @@ try:
               store.create_task("convert", file_id=imp.id, chain_id="c_无",
                                 step_idx=0)) is False)
 
+    # ---------------------------------------------------------------- 10
+    print()
+    print("== 10. info 是**逐块合并**的：响度那组不许被 probe 擦掉 ==")
+    # 用户实测报的：卡片上一直是「undefined LUFS」。根因有两半 ——
+    # ① 写 info 的每个人都在用 `set_file_info` 整体覆盖，于是"改个标签/探测一下"
+    #    就把已经测出来的响度冲掉；② 测出来的响度压根没落库。
+    # 这里钉的是 ① 的机制：整份覆盖 vs 按块合并，以及"文件换了内容"时
+    # 必须把 probe 永远测不出来的那组值丢掉（否则卡片上是**上一个文件**的数字）。
+    m = store.add_file("meas.flac", size=999, mtime=5.0)
+    store.merge_file_info(m.id, {"format": "FLAC", "sampleRate": 44100,
+                                 "loudness": -19.34, "truePeak": -1.2,
+                                 "loudnessRange": 6.4})
+    info = store.get_file(m.id).info
+    check("合并写入了响度那一组",
+          info.get("loudness") == -19.34 and info.get("truePeak") == -1.2,
+          info)
+    check("先写的元数据字段也还在",
+          info.get("format") == "FLAC" and info.get("sampleRate") == 44100, info)
+
+    # probe 那条路：probe 的 dict 里**没有**响度，整体覆盖就会把它擦掉 ——
+    # 所以 handler 用的是 merge。这里直接验合并语义。
+    store.merge_file_info(m.id, {"format": "FLAC", "duration": 12.5})
+    info = store.get_file(m.id).info
+    check("probe 式合并之后响度还在（整体覆盖会丢）",
+          info.get("loudness") == -19.34 and info.get("duration") == 12.5, info)
+
+    # 对照：set_file_info 是**整体覆盖**，语义必须保持原样（别顺手改成合并）
+    store.set_file_info(m.id, {"format": "FLAC"})
+    check("set_file_info 仍然是整体覆盖（它的语义是「这一份就是全部」）",
+          "loudness" not in store.get_file(m.id).info)
+    store.merge_file_info(m.id, {"loudness": -19.34, "truePeak": -1.2,
+                                 "loudnessRange": 6.4})
+
+    # 同一路径又拖进来一次：大小/时间没变 ⇒ 还是同一份内容，测量值有效
+    store.add_file("meas.flac", size=999, mtime=5.0)
+    check("重传同一份内容（大小/时间相同）→ 测量值保留",
+          store.get_file(m.id).info.get("loudness") == -19.34)
+    # 内容换了（大小不同）⇒ 必须丢掉：probe 永远测不出响度，"重新探测"也纠正不了
+    store.add_file("meas.flac", size=1234, mtime=5.0)
+    info2 = store.get_file(m.id).info
+    check("内容换了（大小不同）→ 测量值被丢掉",
+          "loudness" not in info2 and "truePeak" not in info2
+          and "loudnessRange" not in info2, info2)
+    check("丢测量值时**不**连累元数据字段", info2.get("format") == "FLAC", info2)
+
+    # 软删除后重新导入同名文件（复活原行）：同样要清
+    store.merge_file_info(m.id, {"loudness": -20.0})
+    store.delete_file(m.id)
+    store.add_file("meas.flac", size=4321, mtime=9.0)
+    check("软删除后重导同名文件（内容不同）→ 测量值被丢掉",
+          "loudness" not in store.get_file(m.id).info, store.get_file(m.id).info)
+
+    check("MEASUREMENT_KEYS 覆盖全部内容测量值（写它的人与清它的人共用这一份）",
+          set(store.MEASUREMENT_KEYS) == {"loudness", "truePeak", "loudnessRange",
+                                          "samplePeak", "dra", "drp"},
+          store.MEASUREMENT_KEYS)
+    store.merge_file_info("f_不存在", {"loudness": -1.0})
+    check("对不存在的文件合并 → 静默返回，不抛", True)
+
 finally:
     _reset_store()
     config.DB_PATH = _orig_db

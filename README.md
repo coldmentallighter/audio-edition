@@ -128,12 +128,13 @@ cd audio-edition
 
 ### 5. 自检脚本覆盖到"能证伪"的粒度
 
-不靠肉眼看页面。多套脚本 + 浏览器探针，**合计 873 项断言**：
+不靠肉眼看页面。多套脚本 + 浏览器探针；**下面这组脚本合计 922 项断言**
+（需要服务 + Edge 的浏览器探针、以及 UI 演示版自检各自单列，没有算进来）：
 
-- **202 项**后端接口（含路径穿越防护、中文文件名、真实转码产出、响度测量报告与响度出图）
-- **243 项**执行链（建链 / 队列与长任务槽位 / 库结构 / 端到端 / 格式流与码率规则）
-- **150 项**预设与未知卡片（持久化 46 + 保存全流程 65 + 抽屉切换与图标 39）
-- **36 项**响度总览图 PNG（非线性纵轴控制点 / 版面比例 / 确定性）
+- **211 项**后端接口（含路径穿越防护、中文文件名、真实转码产出、响度测量报告与出图、**测量值落库且不被 probe/改标签擦掉**）
+- **314 项**执行链（建链 103 / 队列与长任务槽位 52 / 库结构 75 / 端到端 36 / **串行交接规则 17** / **打包语义 31**）
+- **158 项**预设与未知卡片（持久化 54 + 保存全流程 65 + 抽屉切换与图标 39）
+- **79 项**响度（总览图 PNG 36 + 链上产物与测量落库 28 + **卡片那行显示不许 `undefined`** 15）
 - **36 项**波形 PNG（解出 RGBA 原始像素，逐点统计 alpha 与颜色）
 - **93 项**配色（读落盘的 `theme.css` 复算 6 套主题的全部对比度）
 - **19 项**卡片扩容（位深的实际 codec / 采样格式 / bits_per_raw_sample、重命名的精确文件名、4K 波形尺寸）
@@ -506,15 +507,19 @@ audio-edition/
 # 先起服务（另开一个窗口），再跑：
 $env:PYTHONIOENCODING='utf-8'; chcp 65001 | Out-Null
 
-python tests/smoke_api.py           # 202 项：接口、上传、转码、封面、批量删除、卡片 CRUD、响度报告与出图
-python tests/preset_store_check.py  #  46 项：预设持久化（编号 max+1、快照、非法步骤逐条报原因）
-python tests/chain_build_check.py   #  96 项：建链 + 格式流/码率规则 + 链上提示
+python tests/smoke_api.py           # 211 项：接口、上传、转码、封面、批量删除、卡片 CRUD、响度报告与出图、测量值落库
+python tests/preset_store_check.py  #  54 项：预设持久化（编号 max+1、快照、非法步骤逐条报原因）+ 卡片名唯一性
+python tests/chain_build_check.py   # 103 项：建链 + 格式流/码率规则 + 链上提示 + 服务端 `_op` 注入
 python tests/chain_queue_check.py   #  52 项：队列准入、defer（按墙钟判截止）、长任务槽位
-python tests/chain_store_check.py   #  65 项：派生行寻址、skipped 口径、租约
+python tests/chain_store_check.py   #  75 项：派生行寻址、skipped 口径、租约、info 逐块合并、打包窗口
 python tests/browser_chain_probe.py #  63 项：链的前端接线（要服务 + Edge）
 python tests/browser_chain_preset_probe.py # 65 项：保存预设全流程（要服务 + Edge）
 python tests/browser_drawer_tab_probe.py   # 39 项：抽屉切换 + 图标编辑 + 模态取消（要服务 + Edge）
 python tests/loudness_png_check.py  #  36 项：响度总览图 PNG（轴映射/比例/确定性）
+python tests/loudness_chain_e2e_check.py # 28 项：链上真出报告/出图 + 测量值落库（真队列 + 真 ffmpeg）
+python tests/chain_handoff_check.py # 17 项：串行交接规则（枚举 52 组旁路 + 26 组 derived 反向对照）
+python tests/chain_zip_check.py     # 31 项：打包窗口/多产物/命名/窗口屏障（真 ffmpeg + 真队列）
+python tests/loudness_display_check.py   # 15 项：卡片那行「Loudness」的显示（抠出 app.js 那段表达式交给 node 真跑）
 python tests/waveform_check.py      #  36 项：波形 PNG 逐像素验证
 python tests/theme_check.py         #  93 项：6 套主题对比度与可见度
 python tests/axis_a_check.py        #  19 项：位深 / 重命名零填充 / 4K 波形 / 每个 op 参数透传
@@ -571,6 +576,9 @@ python demo/_build/verify_demo.py   #  75 项：把界面上的交互真点一�
 | `配色方案.md` | 三套源色板（只读输入） |
 | `配色方案-落地规格.md` | 令牌映射推导、对比度验证、变更记录 |
 | `卡片扩充构想.md` | 卡片扩容规划：四条轴、72 张的出处、B/C/D 轴未做部分 |
+| `执行链并发方案.md` | 执行链总方案：接触面矩阵、串行因果边、调度屏障、§9 踩坑清单 |
+| `响度总览图（LoudnessAnalysis）实现构想.md` | 响度总览图/报告的数据来源与 PNG 规格（逐像素实测得出） |
+| `执行链打包与串行交接方案.md` | 串行档交接规则（R1–R8）、**ZIP 打包窗口与命名**、每次执行一个产物目录 |
 | `tests/README.md` | 自检脚本用法与无头浏览器测量的四个坑 |
 
 ---

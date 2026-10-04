@@ -43,7 +43,11 @@ def check(name: str, ok: bool, extra: object = "") -> None:
 
 _tmp = Path(tempfile.mkdtemp(prefix="ae-preset-"))
 _orig_json, _orig_root = cstore.CARDS_JSON, config.ROOT
+_orig_bak = cstore.CARDS_BAK
 cstore.CARDS_JSON = _tmp / "cards.json"
+# ⚠ 备份路径也要一起隔离：`_write_file` 会往 `CARDS_BAK` 复制上一代，
+# 不隔离就等于**测试在写用户目录**（真实 cards.json.bak）—— 同一类事故。
+cstore.CARDS_BAK = _tmp / "cards.json.bak"
 config.ROOT = _tmp
 
 
@@ -291,13 +295,36 @@ try:
           json.loads(cstore.CARDS_JSON.read_text(encoding="utf-8")).get("snapshots"))
     check("cards 也还在", "cards" in json.loads(
         cstore.CARDS_JSON.read_text(encoding="utf-8")))
-    # 坏文件不能让整个预设功能炸掉
+    # 坏文件：**必须抛**，绝不能"当作空库"（2026-10 改）
+    #
+    # 原来这里断言的是"坏文件 → 当作空库，不抛异常"。那条**正是**丢掉用户卡片的原因：
+    # 所有写路径都是"读 → 改一项 → 整份写回"，所以"读失败当空库"会被下一次写
+    # 永久固化 —— 用户拖一下快照栏，卡片就全没了，而且没有报错没有日志。
+    # 现在读不出来就抛 `CardsFileError`，写路径因此中断，盘上文件一个字节不动。
     cstore.CARDS_JSON.write_text("{ 这不是 json", encoding="utf-8")
-    check("坏文件 → 当作空库，不抛异常", cstore.presets() == [])
+    raised = False
+    try:
+        cstore.presets()
+    except cstore.CardsFileError:
+        raised = True
+    check("KNOWN: 坏文件 → 抛 CardsFileError（不是当作空库）", raised)
+    check("KNOWN: 坏文件原样保留（没有被改成空库）",
+          cstore.CARDS_JSON.read_text(encoding="utf-8") == "{ 这不是 json",
+          cstore.CARDS_JSON.read_text(encoding="utf-8"))
+    raised = False
+    try:
+        cstore.add_preset({"name": "预设_99", "mode": "serial",
+                           "steps": _steps(("probe", {}))})
+    except cstore.CardsFileError:
+        raised = True
+    check("KNOWN: 坏文件时**写**也抛（写路径不许在读失败后落盘）", raised)
+    check("KNOWN: 所以卡片没有丢（原来这一下会把 cards 写成空的）",
+          cstore.CARDS_JSON.read_text(encoding="utf-8") == "{ 这不是 json")
     _ = p
 
 finally:
     cstore.CARDS_JSON = _orig_json
+    cstore.CARDS_BAK = _orig_bak
     config.ROOT = _orig_root
     shutil.rmtree(_tmp, ignore_errors=True)
 

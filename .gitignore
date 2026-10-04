@@ -4,10 +4,12 @@
 uploads/
 outputs/
 .cache/
+.trash/
 audioedition.db
 audioedition.db-wal
 audioedition.db-shm
 cards.json
+*.log
 
 # ---------------------------------------------------------------- 探针临时产物
 # 浏览器探针会现场生成这些页面/目录；跑完就没用了。
@@ -31,8 +33,14 @@ _edge*/
 # 探针与脚本自己造的临时素材（WAV/FLAC/PNG…），跑完不必留
 tests/_*_tmp/
 tests/_tmp*/
+tests/_design-extract/
+tests/_preset_profile/
+tests/_tab_profile/
 # snapshot_drag_real.py 每次运行都会把内嵌的 PAGE_JS 写到这里，属于产物
 tests/_snapdrag_page.js
+
+# DSH 视觉工具包的截图产物（harness 自己管的暂存目录，不是项目内容）
+.dsh-vision-toolkit/
 
 # ---------------------------------------------------------------- Python
 __pycache__/
@@ -57,3 +65,4 @@ desktop.ini
 !README.md
 demo/
 target/
+*.ai

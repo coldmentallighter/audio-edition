@@ -90,11 +90,15 @@ check(f"{len(ANCHORS)} 条锚点全部成立", not abad, f"{len(abad)} 条不符
 
 print()
 print("== 4. 卡片可用性 ==")
-# 唯一应当"整片不可选"的链尾：zip（交出 archive，没有 op 吃它）
+# **现在没有任何"整片不可选"的链尾**：连压缩包也不再硬禁 —— `zip` 是 read 且
+# 不吃上一环，后面的步骤照旧作用于当前文件；一条链本来就可以有多个打包步骤
+# （每个收集"上一个打包步骤之后"的产物，见 `执行链打包与串行交接方案.md` §4）。
 blocked_tails = sorted({t for t in OPS_LIST for o in OPS_LIST if not availability(t, o)[0]})
-check("只有 zip 之后全部不可选", blocked_tails == ["zip"], blocked_tails)
-check("zip → 任意卡 都不可选",
-      all(not availability("zip", o)[0] for o in OPS_LIST))
+check("没有任何链尾会整片置灰（含 zip）", blocked_tails == [], blocked_tails)
+check("zip → 任意卡 都**可选**（但每张都要给出'压缩包不会被递下去'的提示）",
+      all(availability("zip", o)[0] for o in OPS_LIST)
+      and all(availability("zip", o)[1] for o in OPS_LIST),
+      [o for o in OPS_LIST if not availability("zip", o)[0]])
 check("链为空时每张卡都能选（现有 op 没有 needs=upstream 的）",
       all(availability(None, o)[0] for o in OPS_LIST))
 check("zip 可以当链的第一张（自身为第一项 → 打包源文件）",
@@ -105,8 +109,10 @@ check("波形图 → 格式转换 可选，但要提示会回到原文件", ok a
 ok, why = availability("extract-cover", "zip")
 check("提取封面 → 打包 ZIP 可选且无需提示（zip 吃图片）", ok and not why, why)
 ok, why = availability("zip", "tags")
-check("打包 ZIP → 改标签 不可选，且原因是链已到尽头",
-      (not ok) and ("最后一环" in why or "接不住" in why), why)
+check("打包 ZIP → 改标签 **可选**，提示里说清压缩包不会被递下去",
+      ok and "压缩包" in why and "当前文件" in why, (ok, why))
+ok, why = availability("zip", "zip")
+check("打包 ZIP → 打包 ZIP 也放行（一条链可以有多个打包步骤）", ok, why)
 # 就地改写之后接得上（in_place 续点）
 ok, why = availability("tags", "convert")
 check("改标签 → 格式转换 可选且无需提示（in_place 续点）", ok and not why, why)
@@ -132,14 +138,12 @@ for a in OPS_LIST:
             mismatch.append((a, b, m, c))
 check("handoff_broken(a,b) ⇔ not compatible(a,b)", not mismatch, mismatch[:6])
 # 反向**不成立**，而且这是有意的：`compatible` 说的是"这一步愿意收这种东西"，
-# `availability` 说的是"界面让不让你选"。`zip` 之后每张卡都 compatible=True
-# （它们都能收下压缩包），但都不该被选 —— 链已经到尽头了。
-# 所以只能断言单向：不可选 + 接不住 才是矛盾（"嘴上说接得住却不让选"）。
+# `availability` 说的是"界面让不让你选"。两者今天已经没有分叉的场合了
+# （压缩包那条硬禁在 P1 里降级成了提示），所以这条断言保持单向：
+# 只有"不可选 + 接得住"才是矛盾（"嘴上说接得住却不让选"）。
 mismatch2 = [(t, o) for t in OPS_LIST for o in OPS_LIST
-             if not availability(t, o)[0] and (t, o) not in
-             {(z, w) for z in OPS_LIST if z == "zip" for w in OPS_LIST}
-             and compatible(t, o)]
-check("不可选 ⇒ 接不住（zip 之后除外：那是终态，不是接不住）", not mismatch2, mismatch2[:6])
+             if not availability(t, o)[0] and compatible(t, o)]
+check("不可选 ⇒ 接不住（今天应当没有不可选的组合）", not mismatch2, mismatch2[:6])
 
 print()
 print("== 6. 未知操作要炸得干净，不是抛异常 ==")
@@ -162,9 +166,8 @@ check("loudness-report 的 gives/gives_formats 是 none（不参与格式流）"
        contract.gives_formats("loudness-report")))
 check("loudness-report 的 mode 是 read（只写 outputs，不改输入）",
       contract.of("loudness-report")["mode"] == "read")
-check("loudness-report 能接在任何链尾后面（包括 zip？不：zip 后全禁）",
-      all(availability(t, "loudness-report")[0]
-          for t in OPS_LIST if t != "zip"))
+check("loudness-report 能接在任何链尾后面（现在**包括 zip**）",
+      all(availability(t, "loudness-report")[0] for t in OPS_LIST))
 
 # ---- `gives='none'` 的只读分析之后，卡片必须照旧可选 --------------------------
 #
@@ -180,22 +183,20 @@ check("确实存在 gives='none' 的 op（否则下面几行是空转）",
       len(_NONE_GIVES) >= 4, _NONE_GIVES)
 for _tail in _NONE_GIVES:
     _blocked = [o for o in OPS_LIST if not availability(_tail, o)[0]]
-    # `zip` 自己是终态，不该被它后面的卡选（`_tail` 是 none 型时 zip 仍可选）
     check(f"链尾「{OPS[ _tail]['label']}」（gives=none）之后**所有卡都还能选**",
           not _blocked, _blocked)
 check("gives='none' 的只读分析之后，格式转换仍然可选",
       availability("loudness-report", "convert")[0]
       and availability("verify", "convert")[0])
-check("但真正的终态仍然全禁：打包 ZIP 之后一个都不能选",
-      all(not availability("zip", o)[0] for o in OPS_LIST))
-check("`none` 与 `archive` 的区别就是这条规则的要点："
-      "前者是「没动那个音频文件」，后者是「没卡片接得住」",
-      availability("loudness-report", "tags")[0] and not availability("zip", "tags")[0])
+check("压缩包之后同样全都能选（P1 起它不是终态了）",
+      all(availability("zip", o)[0] for o in OPS_LIST))
+check("`none` 与 `archive` 的区别：前者是「没动那个音频文件」，"
+      "后者是「压缩包不递下去，但文件还在原处」—— 两者都不该置灰",
+      availability("loudness-report", "tags")[0] and availability("zip", "tags")[0])
 # ⚠ 这里**不要**断言"矩阵里 gives='none' → 别的 op 不是 ⤫/⇥"。
 # `handoff_broken(probe, convert)` 确实是 True，而且是对的：它的定义是
 # "b 会不会拿不到 a 的产物"（`⇥`，链上挂回落提示），**不是"禁止"**。
-# 只读分析之后下一环当然拿不到产物（它压根没产物），所以提示是准确的；
-# 该禁的只有 `archive`。上面"所有卡都还能选"那组才是这条 bug 的判据。
+# 只读分析之后下一环当然拿不到产物（它压根没产物），所以提示是准确的。
 # 格式分类表：有损/无损的分界是"能不能复原"，不是"码率高低"
 check("mp3/aac/m4a/ogg/opus/wma 判为有损",
       all(formats.is_lossy(f) for f in ("mp3", "aac", "m4a", "ogg", "opus", "wma")),

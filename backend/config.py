@@ -7,8 +7,10 @@
 """
 from __future__ import annotations
 
+import datetime
 import os
 import re
+import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +23,20 @@ UPLOADS = ROOT / "uploads"
 OUTPUTS = ROOT / "outputs"
 CACHE = ROOT / ".cache"
 DB_PATH = ROOT / "audioedition.db"
+
+# 「回收站」：**任何删除都先移到这里**，不再直接 unlink。
+#
+# 为什么改（2026-10 事故）：启动时的 `wipe_workspace()` 原本是 `unlink` / `rmtree`，
+# 不进系统回收站。我为了跑一次冒烟测试起了一次 `backend.app`（忘了带 `AE_FRESH=0`），
+# 结果把 `uploads/` 里 6 个音频（约 311MB，含一个刚导入的 DAW marker wav）
+# 一次性永久删掉了。
+#
+# 现在的口径：`uploads/` / `outputs/` / `.cache/` / 数据库文件都**移**进这里，
+# 保留原目录结构，出事了能捞回来。清理策略见 `prune_trash()`。
+TRASH = ROOT / ".trash"
+
+#: 回收站保留多少天。超过就真删（否则它自己会无限涨）。
+TRASH_KEEP_DAYS = 30
 
 # 音频扩展名白名单（需求 §4.2 的常见格式互转）
 AUDIO_EXT = {
@@ -101,8 +117,74 @@ _RESERVED = {
 
 
 def ensure_dirs() -> None:
-    for d in (UPLOADS, OUTPUTS, CACHE):
+    for d in (UPLOADS, OUTPUTS, CACHE, TRASH):
         d.mkdir(parents=True, exist_ok=True)
+
+
+def move_to_trash(p: Path, *, bucket: str = "", reason: str = "") -> Path | None:
+    """把 `p` **移**进回收站，返回落点；失败返回 `None`（绝不抛）。
+
+    口径：
+
+    * 保留目录结构 —— `uploads/专辑/歌.flac` → `.trash/uploads/专辑/歌.flac`，
+      所以捞回来时一眼知道它原来在哪。
+    * 同名冲突加时间戳后缀（`__20261004-175631`），不会覆盖回收站里的旧货。
+    * `bucket` / `reason` 只写进 `.trash/_log.txt`，方便事后追"这是谁删的"。
+
+    ⚠ 用 `shutil.move` 而不是 `os.rename`：跨盘（`%TEMP%` 或另一个分区）时
+    rename 会抛 `OSError`。文件被播放器占着时 Windows 上也可能失败 —— 那种情况
+    返回 `None`，调用方自己决定要不要退回 unlink。
+    """
+    import shutil as _shutil
+
+    src = Path(p)
+    if not src.exists():
+        return None
+    try:
+        rel = src.resolve().relative_to(ROOT.resolve())
+    except ValueError:
+        rel = Path(src.name)                      # 不在项目里：只留个名字
+    dest = TRASH / rel
+    if dest.exists():
+        stamp = time.strftime("%Y%m%d-%H%M%S")
+        dest = dest.with_name(f"{dest.stem}__{stamp}{dest.suffix}")
+    try:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        _shutil.move(str(src), str(dest))
+    except OSError:
+        return None
+    try:
+        with (TRASH / "_log.txt").open("a", encoding="utf-8") as fh:
+            fh.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\t{bucket or '-'}\t"
+                     f"{rel.as_posix()}\t{reason or '-'}\n")
+    except OSError:
+        pass
+    return dest
+
+
+def prune_trash(days: int | None = None) -> int:
+    """把回收站里超过 `TRASH_KEEP_DAYS` 天的东西真删掉。返回删掉的条目数。"""
+    import shutil as _shutil
+
+    keep = TRASH_KEEP_DAYS if days is None else days
+    if keep <= 0 or not TRASH.exists():
+        return 0
+    cutoff = time.time() - keep * 86400
+    n = 0
+    for child in TRASH.iterdir():
+        if child.name in ("_log.txt",):
+            continue
+        try:
+            if child.stat().st_mtime >= cutoff:
+                continue
+            if child.is_dir():
+                _shutil.rmtree(child, ignore_errors=True)
+            else:
+                child.unlink(missing_ok=True)
+            n += 1
+        except OSError:
+            pass
+    return n
 
 
 def sanitize_name(name: str, fallback: str = "untitled") -> str:
@@ -182,6 +264,70 @@ def unique_path(p: Path) -> Path:
     raise RuntimeError(f"无法为 {p.name} 找到可用文件名")
 
 
+# ---------------------------------------------------------------- 执行链产物归属
+#
+# `执行链打包与串行交接方案.md` §4.5 / §5：**每次执行链一个产物目录**，
+# 打包出来的 ZIP 按 `upload-<日期>-<卡片名…>.zip` 命名。
+# 这两个名字**只在后端算一次**（前端只显示）—— 两处各算一遍必然分叉。
+
+# ZIP 名前缀。**字面量**（不是"源文件所在目录名"）：标识"这是由 uploads/ 里的
+# 文件跑出来的包"。想换口径只改这一处。
+ZIP_PREFIX = "upload"
+# 目录名/文件名里每个卡片名最多留几个字（中文卡片名 + MAX_PATH 余量）
+_ZIP_NAME_PART = 12
+# 整个 ZIP 文件名（不含扩展名）的上限
+_ZIP_NAME_MAX = 100
+
+
+def run_date(ts: float) -> str:
+    """`YYYYMMDD`（本地时区）—— 打包名与产物目录名共用。"""
+    return datetime.datetime.fromtimestamp(float(ts or 0)).strftime("%Y%m%d")
+
+
+def zip_filename(date_str: str, step_names: list[str]) -> str:
+    """`upload-<日期>-<卡片名1>-<卡片名2>….zip`。
+
+    `step_names` 是**被装进这个包的产物各自的来源步骤名**（按链上顺序）。
+    全是源文件时传 `["源文件"]`。
+
+    **相邻重名合并成 `名字x2`**：`转 FLAC → 转 FLAC → 打包` 里两个产物同名，
+    写两遍只会让人以为包里有两份不同的东西。
+    名字要过一遍 `sanitize_name` 的同一套清洗（去掉路径分隔符与非法字符）——
+    卡片名是用户随便起的，`a/b:c` 这种会把文件名弄坏。
+    """
+    parts: list[str] = []
+    for raw in (step_names or []):
+        nm = _ILLEGAL.sub("_", unicodedata.normalize("NFC", str(raw or "")))
+        nm = nm.replace("\\", "/").split("/")[-1].strip(" .")
+        nm = nm[:_ZIP_NAME_PART]
+        if not nm:
+            continue
+        if parts and parts[-1] == nm:
+            # 相邻重复：不写两遍。已经带后缀的继续累加（`x2` → `x3`）
+            m = re.fullmatch(r"(.+?)x(\d+)", parts[-1])
+            if m:
+                parts[-1] = f"{m.group(1)}x{int(m.group(2)) + 1}"
+            else:
+                parts[-1] = f"{nm}x2"
+            continue
+        parts.append(nm)
+    if not parts:
+        parts = ["batch"]
+    base = "-".join([ZIP_PREFIX, str(date_str)] + parts)[:_ZIP_NAME_MAX]
+    return f"{base}.zip"
+
+
+def run_dir_name(chain_id: str, ts: float) -> str:
+    """本次执行的产物目录名：`upload-<YYYYMMDD>-<chain_id 末 6>`。
+
+    ⚠ 用 `chain_id` 而不是"当日第几次"：建链不是跨链事务，两次并发建链
+    可能算出同一个序号 → **两次执行的产物落进同一个目录**，正好违反
+    "每次执行的产物不许混在一起"这条要求。`chain_id` 天生唯一。
+    """
+    tail = re.sub(r"[^A-Za-z0-9]", "", str(chain_id or ""))[-6:] or "run"
+    return f"{ZIP_PREFIX}-{run_date(ts)}-{tail}"
+
+
 def is_audio(p: Path) -> bool:
     return p.suffix.lower() in AUDIO_EXT
 
@@ -197,23 +343,25 @@ def wipe_workspace() -> dict:
     所以清掉的只是工作副本，用户磁盘上的原文件不受影响。
 
     在 lifespan 里、任何请求进来之前调用，保证页面首帧一定是空的。
-    """
-    import shutil as _shutil
 
+    ⚠ **2026-10 起不再是真删**：所有东西都**移进 `.trash/`**（保留原目录结构）。
+    原来这里是 `unlink` / `rmtree`，不进系统回收站 —— 结果有人（我）忘了带
+    `AE_FRESH=0` 起一次服务，就把 `uploads/` 里 6 个音频永久删掉了。
+    现在同样的手滑只是丢一次 `shutil.move`，捞得回来。
+    """
     removed = {"uploads": 0, "outputs": 0, "cache": 0}
     for key, d in (("uploads", UPLOADS), ("outputs", OUTPUTS), ("cache", CACHE)):
         if not d.exists():
             continue
         for child in d.iterdir():
             try:
-                if child.is_dir():
-                    _shutil.rmtree(child, ignore_errors=True)
-                else:
-                    child.unlink(missing_ok=True)
+                if move_to_trash(child, bucket=key, reason="wipe_workspace") is None:
+                    continue
                 removed[key] += 1
             except OSError:
                 # 文件被别的进程占用（如播放器）不该拖垮启动
                 pass
+    prune_trash()
     return removed
 
 
@@ -221,11 +369,15 @@ def reset_db() -> None:
     """删掉数据库文件，让 store 重新建一张空表。
 
     比 DELETE FROM 更干净：连自增序列、WAL 里的历史一起清掉。
+
+    同样**改为移进 `.trash/`** —— 库没了等于文件列表和任务历史全丢，
+    和音频一样值得留一份。
     """
     for suffix in ("", "-wal", "-shm"):
         p = Path(str(DB_PATH) + suffix)
         try:
-            p.unlink(missing_ok=True)
+            if not move_to_trash(p, bucket="db", reason="reset_db"):
+                p.unlink(missing_ok=True)
         except OSError:
             pass
 

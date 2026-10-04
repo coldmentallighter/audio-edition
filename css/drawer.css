@@ -497,11 +497,40 @@ html[data-fx="off"] .snap:hover .snap__ico {
 .iconpick--preset {
   padding: 8px; border-radius: 10px;
   background: var(--bg-surface-alt); border: 1px solid var(--border);
-  min-height: 48px;
+  /* ⚠ 三件"不许超框"的事，别删：
+     ① `border-box`：模态里这一列只有 ~209px，`content-box` 会让整块比轨道宽 2px
+        （实测 `scrollWidth 207 > clientWidth 205`）。
+     ② `min-width: 0`：这一列是 grid/flex 子项，默认 `min-width: auto` 会被
+        内容（10 个 34px 格子）顶宽，于是整块**顶出模态框**。
+     ③ 固定宽度的小格子用**网格**排，不用 flex-wrap：flex 的 34+6 柱子刚好跨过
+        列宽边界，每行个数会随宽度抖动（4 或 5 个来回跳），
+        `auto-fill` 是均分，行数变了也不会半个格子挂到下一行。 */
+  box-sizing: border-box;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 34px);
+  /* ⚠ 行高也要钉死：只写 `grid-template-columns` 时，若这一列的高度被
+     父级 flex 压住（`.field` 是 `flex-direction: column`），网格会把
+     **每一行一起压缩** —— 格子还是 34 宽，高度只剩 13px，图标被切掉一半。
+     采过这个坑：`grid-template-columns` 算对了，行高却是压缩后的。 */
+  grid-auto-rows: 34px;
+  gap: 6px;
+  justify-content: start;
+  /* ⚠ `.field` 是 `flex-direction: column` → 这块是 flex 子项，**默认允许被压缩**
+     （`flex-shrink: 1`）。10 个格子要 3 行 114px，被压到 40px 时网格会把每一行
+     一起缩（格子 34×11），图标被切掉一半。`flex: none` + `min-height` 两件都要：
+     前者管"不被压"，后者管"高到够放两行"（一行时也不塌）。 */
+  flex: none;
+  min-height: calc(2 * 34px + 6px + 2 * 8px + 2px);   /* 2 行格子 + 行距 + 内边距 + 边框 */
+  /* 不写 `overflow-x: auto`：这一块本来就不该横滚（格子是固定的 34px），
+     真被撑宽了要**当场看出来**，而不是被一个滚动条藏住。 */
+  max-width: 100%;
 }
 /* 与卡片编辑器同宽同高（16px）。不写的话 `.iconpick__btn svg` 那条命中不了
    （这里的选择器更靠后、也更具体），图标会撑成 24px 的默认尺寸。 */
 .iconpick--preset .iconpick__btn svg { width: 16px; height: 16px; }
+/* 网格里的格子：`flex: 0 0 34px`（editor.css 那条）在网格里是无效的，靠这条钉住尺寸 */
+.iconpick--preset .iconpick__btn { width: 34px; height: 34px; min-width: 0; }
 
 /* 「自动」态：那几个图标是**按链推导**出来的，不是用户手选的 ——
    所以用**虚线边框**而不是实心底色（`editor.css` 的 `[aria-checked="true"]` 给的是
@@ -519,7 +548,16 @@ html[data-fx="off"] .snap:hover .snap__ico {
 .iconpick--preset[data-auto="1"] .iconpick__btn:hover {
   background: linear-gradient(.35turn, #fff4, #fff5);
 }
-.iconpick__acts { display: flex; gap: 8px; margin-top: 6px; }
+/* 底下那两个动作按钮（恢复自动 / 全部图标 ⇄ 只用链上的图标）。
+   ⚠ 必须 `flex-wrap: wrap`：右边那个按钮的文字会在**两倍长**之间来回切
+   （`全部图标` ⇄ `只用链上的图标`），一行放不下时它原来会**顶出模态框**
+   （用户报的"#presetIconsAll 超出模态框"）。允许换行 = 放不下就掉到第二行，
+   而不是横向溢出去。`min-width: 0` 同样是为了不被按钮文字撑宽这一列。 */
+.iconpick__acts {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px;
+  min-width: 0; max-width: 100%;
+}
+.iconpick__acts > .btn { min-width: 0; max-width: 100%; }
 
 .preset__meta {
   margin: 2px 0 0; font-size: 12px; line-height: 1.7; color: var(--text-muted);

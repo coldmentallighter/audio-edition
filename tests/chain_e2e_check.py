@@ -25,6 +25,7 @@
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import sys
 import time
@@ -240,11 +241,19 @@ try:
         print("        [诊断] zip.params =",
               json.dumps((ztask.get("params") or {}), ensure_ascii=False)[:400])
     else:
-        print("        [诊断] zip._artifacts =",
-              json.dumps((ztask.get("params") or {}).get("_artifacts"),
+        # ⚠ 诊断字段从 `_artifacts` 换成了 `window`：打包语义已改成
+        # "按窗口收集全部产物"（`执行链打包与串行交接方案.md` §4），
+        # `_artifacts` 那段回填是死代码、已经删掉。
+        print("        [诊断] zip.window =",
+              json.dumps((ztask.get("result") or {}).get("window"),
                          ensure_ascii=False))
     out3 = (ztask["result"] or {}).get("output")
     check("打包产出了 ZIP", bool(out3), ztask["result"])
+    # 链上产物落**本次执行的目录**（§5）：`outputs/upload-<日期>-<尾号>/….zip`
+    check("链上 ZIP 落在本次执行的目录里",
+          bool(re.match(r"^outputs/upload-\d{8}-[0-9a-z]{6}/", out3 or "")), out3)
+    check("ZIP 名字是 upload-<日期>-<卡片名>.zip",
+          bool(re.search(r"/upload-\d{8}-转 FLAC\.zip$", out3 or "")), out3)
     if out3:
         zpath = ROOT / out3
         with zipfile.ZipFile(zpath) as z:
@@ -256,7 +265,21 @@ try:
               src and all(s.get("from") for s in src), src)
         check("来源写着是哪一步产出的",
               any("step" in (s.get("from") or "") for s in src), src)
-        zpath.unlink(missing_ok=True)
+    # 3a-2：波形 + 转码 → 打包 → **旁路产物与音频产物都要装**（§4.2）
+    r3c, _ = run_chain([{"op": "waveform", "name": "导出波形 PNG"},
+                        {"op": "convert", "name": "转 FLAC", "params": {"format": "flac"}},
+                        {"op": "zip", "name": "打包 ZIP"}], [small_id])
+    zt_c = tasks_of(r3c["taskIds"])[r3c["steps"][2]["taskIds"][0]]
+    check("含旁路产物的链也打包成功", zt_c["state"] == "success", zt_c["error"])
+    out3c = (zt_c["result"] or {}).get("output")
+    if out3c:
+        with zipfile.ZipFile(ROOT / out3c) as z:
+            names_c = z.namelist()
+        check("ZIP 里 PNG 与 FLAC **都在**（老实现只装最后一个）",
+              any(n.lower().endswith(".png") for n in names_c)
+              and any(n.lower().endswith(".flac") for n in names_c), names_c)
+        check("ZIP 名字列出了两个来源卡片名",
+              "导出波形 PNG-转 FLAC" in (out3c or ""), out3c)
     # 3b：打包**单独一张** → 装源文件（必须与 3a 成对）
     r3b, _ = run_chain([{"op": "zip", "name": "打包 ZIP"}], [small_id])
     zt_b = tasks_of(r3b["taskIds"])[r3b["steps"][0]["taskIds"][0]]
@@ -268,10 +291,11 @@ try:
             names = z.namelist()
         check("单独打包装的是**源文件**（.wav）",
               names and all(n.lower().endswith(".wav") for n in names), names)
+        check("名字是 upload-<日期>-源文件.zip",
+              bool(re.search(r"/upload-\d{8}-源文件\.zip$", out3b or "")), out3b)
         src = (zt_b["result"] or {}).get("sources") or []
         check("来源标成 source",
               src and all(s.get("from") == "source" for s in src), src)
-        zpath.unlink(missing_ok=True)
 
     # ================================================================ 4
     print()
@@ -496,10 +520,17 @@ finally:
         for p in (ROOT / "outputs").glob(pat):
             if p.name.startswith("chain-"):
                 p.unlink(missing_ok=True)
-    for p in (ROOT / "outputs" / "zips").glob("*.zip") if (ROOT / "outputs" / "zips").exists() else []:
-        pass
-    import shutil
-    shutil.rmtree(WORK, ignore_errors=True)
+    # ⚠ 链上产物现在落**本次执行的目录**（`outputs/upload-<日期>-<尾号>/`，方案 §5），
+    # 所以清理要连目录一起删 —— 只 glob `outputs/zips/*.zip` 会留下整批目录。
+    # 只删这次测试自己造的（前缀 `upload-`）与临时源文件，不碰用户产物。
+    import shutil as _sh
+    for d in (ROOT / "outputs").glob("upload-*"):
+        if d.is_dir():
+            _sh.rmtree(d, ignore_errors=True)
+    for d in (ROOT / "outputs").glob("upload-*"):
+        if d.is_file():
+            d.unlink(missing_ok=True)
+    _sh.rmtree(WORK, ignore_errors=True)
 
 print()
 print(f"结果：{PASS} passed, {FAIL} failed")

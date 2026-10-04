@@ -6,11 +6,33 @@
 三样东西共用一个文件（`cards` / `snapshots` / `presets`），这是**有意的**：
 `AE_FRESH=0` 的保留语义、备份、迁移、原子替换只要写一遍。新开一个配置文件
 就得把那些各写一遍，而它们每一样都可能写错。
+
+⚠ **2026-10：老板问"用户的卡片怎么一直消失？是不是没实体保存？"**
+是实体保存的（就是这个文件），但当时有**三条会静默把它清空**的路径，都已修掉：
+
+1. **读失败会伪造一份空配置**（最危险的一条）。原来是
+   `except (OSError, json.JSONDecodeError): return {"cards": [], ...}` ——
+   而所有写路径都是"读 → 改一项 → 整份写回"。于是**任何一次读失败**（文件被另一个
+   进程占着、或内容坏了）都会让下一次写（用户随便拖一下快照栏就够了）把
+   `cards: []` **永久落盘**。没有报错、没有日志，用户只会看到"卡片又没了"。
+   现在读不出来就**抛**（`CardsFileError`），写路径因此中断，原文件一个字节都不动。
+2. **临时文件名是固定的**（`cards.json.tmp`）。两个写入者会写同一个临时文件，
+   一个 `replace` 就可能把另一个**写了一半**的内容搬上去 —— 直接产出坏 JSON，
+   再被第 1 条放大成"卡片全没了"。`audio.py` 早就在 ebur128 的元数据文件上栽过同一个
+   跟头（那里的注释写着"中间文件名**每个任务唯一**"）。现在临时名带 pid + uuid。
+3. **没有上一代备份**。现在替换前留一份 `cards.json.bak`（上一代的**好**文件），
+   真出事能捞回来。
+
+⚠ `_lock` 是**进程内**的锁。`cards.json` 在仓库根、被**所有**实例共用，所以
+**同时只开一个实例**；临时名唯一 + 备份这两条是"万一开了两个"时的兜底，
+不是"可以开两个"的许可。
 """
 from __future__ import annotations
 
 import json
+import os
 import re
+import shutil
 import threading
 import time
 import uuid
@@ -22,43 +44,91 @@ from backend.cards.builtin import BUILTIN_CARDS, SNAPS_DEFAULT
 from backend.cards.validate import validate_card
 
 CARDS_JSON = config.ROOT / "cards.json"
+#: 上一代的**好**文件（替换前留一份）。真出事能捞回来 —— 用户数据没有第二个来源。
+CARDS_BAK = CARDS_JSON.with_name(CARDS_JSON.name + ".bak")
 
 _lock = threading.Lock()
 
+#: 读失败时重试几次、每次退避多少秒。Windows 上另一个进程正在 `replace` 的瞬间，
+#: `read_text` 会抛一次 `PermissionError` —— 退避重试能把"偶发"和"真坏"分开。
+_READ_RETRY = 4
+_READ_BACKOFF = 0.03
+
+_EMPTY = {"version": 1, "cards": [], "snapshots": [], "presets": []}
+
+
+class CardsFileError(RuntimeError):
+    """`cards.json` 读不出来（不是"没有"）。
+
+    **绝不能**把它当成"没有自定义卡片"：那会让下一次写把用户的卡片永久清掉。
+    """
+
+
 # ---------------------------------------------------------------- 存储
 
+def _read_file() -> dict:
+    """读整份配置（cards + snapshots + presets）。
+
+    * 文件**不存在** → 合法空配置（新装就是这个状态）；
+    * 文件**存在但读不出来 / 不是合法 JSON** → **抛 `CardsFileError`**。
+
+    第二条是 2026-10 修掉的真 bug：原来这里 `return {...空...}`，于是**任何一次读
+    失败都会被下一次写固化成"用户没有卡片"**。读不出来必须让调用方失败，而不是
+    替用户决定"你没有卡片"。
+    """
+    for attempt in range(_READ_RETRY):
+        try:
+            raw = CARDS_JSON.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return dict(_EMPTY)
+        except OSError:
+            time.sleep(_READ_BACKOFF * (attempt + 1))
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as e:
+            raise CardsFileError(
+                f"{CARDS_JSON.name} 不是合法 JSON（第 {e.lineno} 行）：{e.msg}。"
+                f"文件已原样保留，没有被覆盖；上一代在 {CARDS_BAK.name}。") from e
+        if isinstance(data, list):                   # 兼容早期只有数组的格式
+            return {"version": 1, "cards": data, "snapshots": [], "presets": []}
+        if not isinstance(data, dict):
+            raise CardsFileError(f"{CARDS_JSON.name} 的顶层既不是对象也不是数组")
+        data.setdefault("cards", [])
+        data.setdefault("snapshots", [])
+        data.setdefault("presets", [])
+        data.setdefault("version", 1)
+        return data
+    raise CardsFileError(
+        f"{CARDS_JSON} 读不出来（被别的进程占着？）。**没有**覆盖它 —— "
+        f"卡片还在盘上，稍后再试一次。")
+
+
 def _read_custom() -> list[dict]:
-    if not CARDS_JSON.exists():
-        return []
-    try:
-        data = json.loads(CARDS_JSON.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return []
-    items = data.get("cards") if isinstance(data, dict) else data
+    items = _read_file().get("cards")
     return [c for c in (items or []) if isinstance(c, dict)]
 
 
-def _read_file() -> dict:
-    """读整份配置（cards + snapshots + presets）。"""
-    if not CARDS_JSON.exists():
-        return {"version": 1, "cards": [], "snapshots": [], "presets": []}
-    try:
-        data = json.loads(CARDS_JSON.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return {"version": 1, "cards": [], "snapshots": [], "presets": []}
-    if isinstance(data, list):                       # 兼容早期只有数组的格式
-        return {"version": 1, "cards": data, "snapshots": [], "presets": []}
-    data.setdefault("cards", [])
-    data.setdefault("snapshots", [])
-    data.setdefault("presets", [])
-    data.setdefault("version", 1)
-    return data
-
-
 def _write_file(payload: dict) -> None:
-    tmp = CARDS_JSON.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(CARDS_JSON)          # 原子替换，别写一半把用户配置弄丢
+    """整份写回：唯一临时名 → 备份上一代 → 原子替换。
+
+    ⚠ 临时名**必须唯一**（pid + uuid）。原来固定叫 `cards.json.tmp`，两个写入者
+    （两个线程、或两个实例）会写同一个临时文件，一个 `replace` 就把另一个写了一半的
+    内容搬上去 —— 产出坏 JSON，然后被上面 `_read_file` 那条旧逻辑放大成"卡片全丢"。
+    """
+    tmp = CARDS_JSON.with_name(f"{CARDS_JSON.name}.{os.getpid()}-{uuid.uuid4().hex[:8]}.tmp")
+    try:
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2),
+                       encoding="utf-8")
+        # 备份**上一代**再替换。best-effort：备份失败不该挡住这次写。
+        try:
+            if CARDS_JSON.exists():
+                shutil.copy2(CARDS_JSON, CARDS_BAK)
+        except OSError:
+            pass
+        tmp.replace(CARDS_JSON)          # 原子替换，别写一半把用户配置弄丢
+    finally:
+        tmp.unlink(missing_ok=True)      # 失败路径别留垃圾（成功后它已经不存在了）
 
 
 def _write_custom(items: list[dict]) -> None:

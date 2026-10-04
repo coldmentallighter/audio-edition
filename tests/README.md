@@ -6,7 +6,7 @@
 > `.cache/` 和数据库（需求：「每次打开都是空页面」）。所以自检请**先起服务、再跑测试**，
 > 否则你会看到自己的文件被清掉。想保留就设 `AE_FRESH=0`。
 
-## 1. 后端接口（199 项）
+## 1. 后端接口（208 项）
 
 ```powershell
 # 先起服务（另开一个窗口）
@@ -25,7 +25,8 @@ python tests/smoke_api.py
 **卡片名全局唯一**（与内置/自定义重名一律 400、改卡时撞自己不算重名、导入重名跳过）、
 **自定义卡片真跑一次**（参数必须原样传到执行层并产出文件）、
 **响度测量报告**（`loudness-report` 真出一份 Markdown：小节齐全、`refLufs` 透传、
-客户端伪造 `_op` 无效，见下）。
+客户端伪造 `_op` 无效，见下）、**测量值落库**（`info.loudness` 等于这趟实测的
+`integrated`，且「重新探测」/改标签之后**还在** —— 那两条都只能合并、不能整体覆盖）。
 
 > **§19 是一节"补漏洞"的测试。** 在它之前整个冒烟测试**没有一处碰过响度三兄弟**，
 > 于是"三个 op 共用一个 handler、靠服务端注入 `_op` 分流"这条接线一点回归保护都没有。
@@ -44,7 +45,18 @@ python tests/smoke_api.py
 | **路由名 = op 名**一致性，且每条 `/api/ops/<route>` 都可达 | 卡片执行 404（`op` 写成任务类型名，如 `cover_embed`） |
 | **每个参数逐个透传**（写这批时是 29 个） | 路由把参数丢掉（`op_convert` 曾静默丢 `bitDepth`） |
 | 卡片校验：分类必须在册、`id`/slug 唯一 | 分类写错时静默降级到「自定义」 |
-| 前端**不再有兜底卡表** | 前后端两份卡片表各自漂移（13 vs 15） |
+| **卡片名全局唯一**（内置 + 自定义） | 与内置卡同名的自定义卡**在库里点不开**：卡片库按名字认卡，`find` 永远命中排在前面的内置卡，于是"我新建的卡被识别成内置卡"，改不了也删不掉（用户实测） |
+| **前端**不再有兜底卡表 | 前后端两份卡片表各自漂移（13 vs 15） |
+
+> **`undefined LUFS` 那条线上修过两次，两半都要留着。**
+> 卡片上「Loudness」那行曾经是 `undefined LUFS`：
+> ① 前端从来没把 `info.loudness` 读进 `FILES`，而模板是裸插值 ——
+>    由 `loudness_display_check.py` 钉（连"没测过要显示 `—`"和负对照一起）。
+> ② 后端测出来的响度压根没落库（只进了任务结果），而 `set_file_info` 是**整体覆盖**，
+>    于是"重新探测"或"改个标签"还会把已经测出来的值擦掉 ——
+>    由 `chain_store_check.py` §10 与 `smoke_api.py` §19 钉。
+> 谁把 `merge_file_info` 换回 `set_file_info`（或反过来给 `Loudness` 那格写回裸插值），
+> 这三处都会红。
 
 测试自己造音频和图片、自己清理（连磁盘一起删，自定义卡片也会删干净），
 不会留垃圾。
@@ -102,14 +114,17 @@ python tests/snapshot_drag_real.py     # 需要服务在 8765 且已铺数据
 
 | 脚本 | 项数 | 验什么 | 需要什么 |
 |---|---|---|---|
-| `boundary_check.py` | 49 | **纯函数**：接触面登记、15×15 矩阵、抽样锚点、卡片可用性、格式有损/无损分类、"只读分析之后仍可选" | 无（不连库不连服务） |
-| `chain_store_check.py` | 65 | **库结构**：老库增量补列、派生产物寻址、`skipped` 聚合口径、内存租约 | 无（自己建临时库） |
+| `boundary_check.py` | 50 | **纯函数**：接触面登记、15×15 矩阵、抽样锚点、卡片可用性、格式有损/无损分类、"只读分析之后仍可选" | 无（不连库不连服务） |
+| `chain_store_check.py` | 75 | **库结构**：老库增量补列、派生产物寻址、`skipped` 聚合口径、内存租约、**`info` 逐块合并**（响度那组不许被 probe 擦掉，内容换了才丢） | 无（自己建临时库） |
+| `chain_handoff_check.py` | 17 | **串行档交接规则**（`执行链打包与串行交接方案.md` §3）：**枚举 52 组**旁路产物组合断言"下游输入绝不被换"、**枚举 26 组** derived 组合做反向对照、`consumes=False` 按**产物类型**判（`转换→校验` 校验产物、`波形→校验` 校验源文件）、`zip` 单独钉、R8 报错是人话（**真队列**跑一遍）、图片输入不受伤 | 无（自己建临时库） |
+| `chain_zip_check.py` | 31 | **打包语义**（同方案 §4/§5，真 ffmpeg + 真队列 + 临时工作区）：单卡装源文件、串行装产物、**旁路产物与音频产物都要装**、`转FLAC→打包→转MP3→打包` **两个 zip 且窗口不重叠**、并行两个音频产物都装、**窗口屏障不抢跑**（`波形→探测→打包`）、失败不回落、**两次执行目录不同**、非链仍在 `outputs/zips/` | 无（自己建临时工作区 + 自造 wav） |
 | `chain_queue_check.py` | 52 | **调度语义**：`defer` 不写库、不空转、不卡死、五种当场结案、同文件互斥、**推迟截止按墙钟时间**、**长任务槽位**（短任务不被堵住） | 无（假 handler 走真队列） |
 | `chain_build_check.py` | 103 | **建链**：一步建成、串行连边不跨文件、后端自己校验可用性、汇总类只建一条、**格式流（有损→无损）+ 码率/采样率升档规则**、**并行档提示的范围**（只读/旁路不报）、**共用任务类型的 op 家族必须带服务端 `_op`** | 无（自己建临时库） |
 | `chain_e2e_check.py` | 36 | **真端到端**：失败不回落、ZIP 三态、交错断言、并行对照 | 服务在 8765 |
 | `browser_chain_probe.py` | 63 | **前端接线**：档位开关、链上提示、卡片置灰、一次提交、单步不走链、**前后端可用性逐组对账**、**串行档格式流在点之前置灰** | 服务在 8765 + 无头 Edge |
 | `loudness_png_check.py` | 36 | **响度总览图 PNG**（纯函数 + 真文件）：`axis_y` 控制点逐点命中、非线性放大（255:163）、静音底剔除、段内取最大、红带口径、**确定性**、各宽度比例一致 | 无（真文件那节要 `uploads/` 有音频） |
-| `loudness_chain_e2e_check.py` | 13 | **执行链 → 响度产物的端到端**（真队列 + 真 ffmpeg，临时工作区）：链上的「响度分析报告」真的落 `.md`、链上的「导出响度分析图」真的落 `.png`、`result.output` 带路径，以及反向对照 —— `loudness`（总览图）**不该**多落任何文件 | 无（自己建临时工作区 + 自造 3 秒正弦） |
+| `loudness_chain_e2e_check.py` | 28 | **执行链 → 响度产物的端到端**（真队列 + 真 ffmpeg，临时工作区）：链上的「响度分析报告」真的落 `.md`、链上的「导出响度分析图」真的落 `.png`、`result.output` 带路径；**测量值落进 `info`，且「重新探测」/改标签之后还在、内容换了才丢**；反向对照 —— `loudness`（总览图）**不该**多落任何文件 | 无（自己建临时工作区 + 自造 3 秒正弦） |
+| `loudness_display_check.py` | 15 | **卡片上那行「Loudness … LUFS」的显示**：把 `app.js` 里**真那段**映射与模板表达式抠出来交给 node 逐种输入跑（`null`/`undefined`/空串/非数字 → `—`；`-19.34` → `-19.3 LUFS`；`0` 不算"没测过"），并带**负对照**证明裸拼接确实会印 `undefined LUFS` / `NaN LUFS` | node（不需要服务、不需要浏览器） |
 
 预设与未知卡片（§3.8.2 / §9.1.2）单独三套：
 
@@ -120,12 +135,15 @@ python tests/snapshot_drag_real.py     # 需要服务在 8765 且已铺数据
 | `browser_drawer_tab_probe.py` | 47 | **抽屉标题切换 + 图标编辑 + 模态动效与取消**：`aria`/标签/容器/联动控件、**刷新后仍停在预设视图**、链非空时点预设是**追加**、图标手选/取消/恢复自动 + **选择器与卡片编辑器同一套**（`.iconpick__btn` / `aria-checked` / `data-auto`；自动态虚线、手选实心、提示文字改口）、**四个模态都登记 `bindFollow`**、两个新模态的「取消」与 `Esc`（且**取消不落盘**） | 服务在 8765 + 无头 Edge |
 
 ```powershell
-python tests/boundary_check.py            # 49 项，最快，先跑它
+python tests/boundary_check.py            # 50 项，最快，先跑它
 python tests/preset_store_check.py        # 54 项（预设持久化 + 卡片名唯一性，不需要服务）
-python tests/chain_store_check.py         # 65 项
+python tests/chain_store_check.py         # 75 项
 python tests/chain_queue_check.py         # 52 项
 python tests/chain_build_check.py         # 103 项
-python tests/loudness_chain_e2e_check.py  # 13 项（真跑 ffmpeg，不需要服务）
+python tests/loudness_chain_e2e_check.py  # 28 项（真跑 ffmpeg，不需要服务）
+python tests/loudness_display_check.py    # 15 项（抠出 app.js 那段表达式交给 node 跑）
+python tests/chain_handoff_check.py       # 17 项（串行交接规则，枚举 52+26 组）
+python tests/chain_zip_check.py           # 31 项（打包语义，真 ffmpeg）
 python tests/chain_e2e_check.py           # 36 项（要服务）
 python tests/browser_chain_probe.py       # 63 项（要服务 + Edge）
 python tests/browser_chain_preset_probe.py # 73 项（要服务 + Edge）

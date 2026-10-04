@@ -250,7 +250,9 @@ function renderFiles() {
                     title="${playHint(f)}">${playingId === f.id ? svg('pause') : svg('play')}</button>
             <span class="transport__time" data-time="${f.id}">${fmtClock(0, '0:00')} / ${fmtClock(f.dur)}</span>
           </div>
-          <span class="kv"><span class="kv__k">Loudness</span><span class="kv__v">${f.loudness} LUFS</span></span>
+          <span class="kv"><span class="kv__k">Loudness</span><span class="kv__v">${
+            f.loudness == null || !isFinite(f.loudness)
+              ? '—' : f.loudness.toFixed(1) + ' LUFS'}</span></span>
           <span class="kv"><span class="kv__k">Type</span><span class="kv__v">${f.format}</span></span>
           <span class="kv"><span class="kv__k">Duration</span><span class="kv__v">${fmtDur(f.dur)}</span></span>
           <span class="kv"><span class="kv__k">SampleRate</span><span class="kv__v">${(f.rate / 1000).toFixed(1)} kHz</span></span>
@@ -737,7 +739,7 @@ function openCardMenu(x, y, name) {
       const params = await resolveCardParams(c);   // 封面卡在这里选图
       if (!params) return;
       try {
-        const r2 = await API.op(c.op, { fileIds: ids, ...params });
+        const r2 = await API.op(c.op, { ...currentTheme(), fileIds: ids, ...params });
         addLog(`▶ ${c.name} · ${ids.length} 个文件 → ${r2.total || 0} 个任务`, 'ok');
         toast('已提交', `${c.name} · ${r2.total || 0} 个任务`);
         if (window.App && App.refreshQueue) App.refreshQueue();
@@ -793,7 +795,8 @@ function pickFile(accept) {
 
 /** 把一批文件推进某个 op；返回后端回执 */
 async function submitOp(op, ids, params) {
-  const r = await API.op(op, { fileIds: ids, ...(params || {}) });
+  // 主题一并带上：服务端渲染的产物（响度 SVG）要靠它上色，见 `currentTheme()`
+  const r = await API.op(op, { ...currentTheme(), fileIds: ids, ...(params || {}) });
   addLog(`▶ ${op} · ${ids.length} 个文件 → ${r.total || 0} 个任务`, 'ok');
   if (window.App && App.refreshQueue) App.refreshQueue();
   return r;
@@ -1806,12 +1809,16 @@ function availabilityOf(op) {
   const needs = spec.needs || [];
   const acceptsAny = needs.includes('any');
 
-  // 终态**必须最先判**：`archive`（压缩包）没有任何卡接得住，链到头了。
-  // 放到后面判就会被 `consumes === false`（校验/打包自己不吃上一环）救回来 ——
-  // 那是错的：`打包 ZIP → 打包 ZIP` 不该可选，`ZIP → 完整性校验` 也不该。
-  // 后端 `boundary.availability` 的第 1 步就是它，顺序不能动。
+  // 压缩包：**可选 + 提示**，不再硬禁。
+  // 原来这里是"终态，链到头了"（`app.js` 与后端 `boundary.availability` 的第 1 步），
+  // 但 `zip` 是 `mode=read` + `consumes=false`：它什么都没改动，后面的步骤
+  // 照旧作用于当前文件；而且一条链本来就可以有**多个**打包步骤（每个收集
+  // "上一个打包步骤之后"的产物）。判据改动见
+  // `执行链打包与串行交接方案.md` §4.4 —— 前后端必须同步，否则
+  // `browser_chain_probe.py` 的 op×op 对账会红。
   if (give === 'archive') {
-    return { ok: false, why: `「${tailSpec.label}」交出的是压缩包，应当是链的最后一环` };
+    return { ok: true, why: `「${tailSpec.label}」交出的是压缩包，`
+                          + `它不会被递给下一步（后面的步骤作用于当前文件）` };
   }
 
   // 能不能续下去。判据与后端 `boundary._hands_something_off` **逐字对应**：
@@ -2742,6 +2749,24 @@ function setChainMode(mode) {
  * @param only 只执行某一步（链上单击）。**单步不走链**：它不构成一条链，
  *             所以不受档位与可用性约束（方案 §9.13c），保持原来的一次性提交。
  */
+/**
+ * 用户**此刻**的主题，随执行链一起交给后端。
+ *
+ * 为什么要前端传：后端不知道浏览器选的是哪套主题（`data-theme` / `data-mode` 是
+ * 页面上的属性，`localStorage['ae-theme']` 也在浏览器里）。而响度 SVG 是**服务端**
+ * 渲染的产物，导出成独立文件后没有任何 CSS 变量可用 —— 所以颜色必须在服务端按这套
+ * 主题算成实色写进文件（老板 2026-10："svg 生成的主题颜色改成用户执行链时主题的，
+ * 并在导出时将颜色硬编码入文件"）。
+ *
+ * 取值口径与 `waveTokens()` 完全一致（同一个 `data-theme`/`data-mode`），
+ * 这样画布上的波形和服务端导出的图不会出现"一个跟主题、一个不跟"。
+ */
+function currentTheme() {
+  const r = document.documentElement;
+  return { theme: r.dataset.theme || 't1',
+           themeMode: r.dataset.mode === 'dark' ? 'dark' : 'light' };
+}
+
 async function runChain(only) {
   if (!chain.length) { toast('执行链为空', '先把卡片加入链', 'error'); return; }
   const ids = selectedIds();
@@ -2782,11 +2807,11 @@ async function runChain(only) {
   try {
     if (only != null) {
       // 单步执行：不构成链，走原来的一次性提交
-      const r = await API.op(steps[0].op, { fileIds: ids, ...steps[0].params });
+      const r = await API.op(steps[0].op, { ...currentTheme(), fileIds: ids, ...steps[0].params });
       addLog(`▶ 单步：${steps[0].name} · ${r.total || 0} 个任务`, 'ok');
       toast('已提交单步', `${steps[0].name} · ${r.total || 0} 个任务`);
     } else {
-      const r = await API.chain({ mode: chainMode, fileIds: ids, steps });
+      const r = await API.chain({ mode: chainMode, fileIds: ids, steps, ...currentTheme() });
       lastChainId = r.chainId;
       const modeCn = chainMode === 'serial' ? '串行' : '并行';
       addLog(`▶ 执行链（${modeCn}）：${steps.map(s => s.name).join(' → ')}`
@@ -3878,6 +3903,9 @@ window.applyServerFiles = function (files) {
 
      ⚠ progress 必须进指纹（否则处理中的进度条不刷新），用 Math.round 压到 1% 粒度；
        _peaks 也要进（峰值图生成好之后要能触发一次真实重绘）。
+     ⚠ **loudness 必须进指纹**：它是"跑完响度分析/标准化之后才有"的字段，
+       任务成功时 hasCover/tags 全都没变 —— 不进指纹就不会重绘，
+       卡片上那行要等到下一次无关的变更才刷新（表现是"任务成功了但数字没变"）。
      ⚠ COVER_V 也要进：**替换一张已有封面**时 hasCover 是 1→1 不变的，
        而 waitForCover() 会先 bump COVER_V 再 renderFiles()，那一次 <img> 的
        ?v= 可能仍指向服务端上的旧图。把版本号放进指纹，后续轮询才会重绘、
@@ -3890,7 +3918,8 @@ window.applyServerFiles = function (files) {
     return [f.id, f.state, Math.round(((f.tasks || {}).progress) || 0),
             info.hasCover ? 1 : 0, COVER_V[f.id] || 0,
             tg.title || '', tg.artist || '', tg.album || '', tg.tracknumber || '',
-            info.format || '', info.duration || 0, f._peaks || ''].join('\u0001');
+            info.format || '', info.duration || 0, f._peaks || '',
+            info.loudness == null ? '' : info.loudness].join('\u0001');
   }).join('\u0002');
 
   if (sig === _filesSig && list.length === FILES.length) {
@@ -3920,6 +3949,12 @@ window.applyServerFiles = function (files) {
       format: info.format || (f.name.split('.').pop() || '').toUpperCase(),
       rate: info.sampleRate || 0,
       depth: info.bits || 0,
+      // 响度是**内容测量值**：只有跑过响度分析 / 响度标准化才会有（probe 不解码，
+      // 测不出来）。后端写在 `info.loudness` 上，见 `store.MEASUREMENT_KEYS`。
+      // 取不到就是 null，由 renderFiles 显示 `—` —— 不要留 undefined，
+      // 那个字符串会直接印到卡片上（"undefined LUFS"）。
+      loudness: (info.loudness != null && info.loudness !== '')
+                  ? Number(info.loudness) : null,
       ch: info.channels ? `${info.channels} ch` : '—',
       dur: info.duration || 0,
       size: fmtBytes(f.size),

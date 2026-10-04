@@ -2,13 +2,27 @@
 .fcard {
   display: flex; flex-direction: column; gap: 7px;
   padding: 12px 13px;
-  background: var(--bg-surface-alt);
-  border: 1px solid var(--border);
+  border: 1px solid transparent;        /* 描边让位给 border-box 背景层 */
   border-radius: var(--radius-card);
   cursor: pointer; text-align: left;
-  transition: background .14s, border-color .14s, box-shadow .14s;
+
+  /* 两层：内层填充(padding-box) + 外层描边(border-box) */
+  background:
+    linear-gradient(var(--bg-surface-alt), var(--bg-surface-alt)) padding-box,
+    linear-gradient(var(--border), var(--border))                 border-box;
+
+  transition: background .14s, box-shadow .14s;   /* border-color 不再需要 */
 }
-.fcard:hover { background: var(--tint-primary); border-color: var(--border-strong); box-shadow: var(--shadow-sm);}
+
+.fcard:hover {
+  background:
+    linear-gradient(var(--tint-primary), var(--tint-primary)) padding-box,
+    radial-gradient(140% 140% at 18% 0%,          /* ← 暗角：光源左上 */
+      var(--border-strong) 0%,
+      color-mix(in srgb, var(--border-strong) 35%, transparent) 40%,
+      rgba(0, 0, 0, .55) 100%) border-box;
+  box-shadow: var(--shadow-sm);
+}
 .fcard__top { display: flex; align-items: center; gap: 9px; }
 .fcard__ico {
   flex: 0 0 auto; width: 30px; height: 30px;
@@ -269,7 +283,8 @@
 #presetSections .pcard:hover {
   box-shadow:
     /*0 0px 24px color-mix(in srgb, var(--fill-primary) 25%, transparent ),*/
-    0 2px 6px  color-mix(in srgb, var(--on-fill) 25%, rgba(0, 0, 0, 0.2) );
+    0 2px 6px  color-mix(in srgb, var(--on-fill) 25%, rgba(0, 0, 0, 0.2) ),
+    inset 0 0 24px -8px var(--bg-surface);
   z-index: 56;
 }
 
@@ -343,11 +358,15 @@ html[data-fx="off"] #presetSections .pcard:hover .pcard__ico {
 }
 
 
-#cardSections .fcard:not(.fcard--new):hover .fcard__desc,
-#presetSections .pcard:hover .pcard__desc {
+#cardSections .fcard:not(.fcard--new):hover .fcard__desc {
   -webkit-text-stroke: 3px var(--tint-primary);
   paint-order: stroke fill;
 }
+#presetSections .pcard:hover .pcard__desc {
+  -webkit-text-stroke: 3px color-mix(in srgb, var(--tint-primary) , var(--bg-app));
+  paint-order: stroke fill;
+}
+
 #cardSections .fcard:not(.fcard--new):hover .fcard__name,
 #presetSections .pcard:hover .pcard__name {
   -webkit-text-stroke: 1px var(--tint-primary);
@@ -446,8 +465,9 @@ html[data-fx="off"] #presetSections .pcard:hover .pcard__ico {
   filter: saturate(.35);
 }
 #cardSections .fcard.fcard--blocked:hover {
-  background: var(--bg-surface-alt);
-  border-color: var(--border);
+  background:
+    linear-gradient(var(--bg-surface-alt), var(--bg-surface-alt)) padding-box,
+    linear-gradient(var(--border), var(--border))                 border-box;
   box-shadow: none;
   transform: none;
 }

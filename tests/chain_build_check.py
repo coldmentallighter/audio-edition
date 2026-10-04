@@ -180,15 +180,25 @@ try:
     # ---------------------------------------------------------------- 4
     print()
     print("== 4. 后端自己校验可用性（绕过前端也拦得住）==")
+    # ⚠ 这一段原来钉的是"打包 ZIP 之后接任何东西都被拒"。**P1 起不再是拒**：
+    # `zip` 是 `mode=read` + `consumes=False`，它什么都没改动，后面的步骤
+    # 照旧作用于当前文件；而且一条链可以有多个打包步骤（每个收集"上一个
+    # 打包步骤之后"的产物，见 `执行链打包与串行交接方案.md` §4）。
+    # 所以这里改成断言"放行 **且** 挂上提示"。
     bad, why, idx = _reject({"mode": "parallel", "fileIds": ids,
                              "steps": [{"op": "zip"}, {"op": "tags"}]})
-    check("打包 ZIP → 改标签 被拒", bad, why)
-    check("拒绝时指出是第几步（前端据此标红）", idx == 1, idx)
-    check("拒绝的原因是人话", "接" in why or "最后一环" in why, why)
-    bad, why, idx = _reject({"mode": "parallel", "fileIds": ids,
-                             "steps": [{"op": "zip"}, {"op": "convert"}]})
-    check("打包 ZIP 之后接任何东西都被拒", bad, why)
-    # 反过来：合法组合必须放行
+    check("打包 ZIP → 改标签 放行（不再是终态）", not bad, why)
+    r_zt = chain.build_chain({"mode": "parallel", "fileIds": ids,
+                              "steps": [{"op": "zip"}, {"op": "tags"}]})
+    check("但它必须挂一条提示：压缩包不会被递下去",
+          any("压缩包" in n["text"] and n["stepIdx"] == 0 for n in r_zt["notes"]),
+          r_zt["notes"])
+    bad, why, idx = _reject({"mode": "serial", "fileIds": ids,
+                             "steps": [{"op": "convert"}, {"op": "zip"},
+                                       {"op": "convert"}, {"op": "zip"}]})
+    check("一条链两个打包步骤 放行（多 zip 是合法用法）", not bad, why)
+    # 真正的拒绝仍然存在：未知 op / 非法模式 / 空链（见 §6）
+    # 合法组合必须放行
     bad, why, idx = _reject({"mode": "serial", "fileIds": ids,
                              "steps": [{"op": "tags"}, {"op": "convert"}, {"op": "zip"}]})
     check("改标签 → 转 FLAC → 打包 放行", not bad, why)
@@ -227,6 +237,11 @@ try:
     bad, why, idx = _reject({"mode": "parallel", "fileIds": ids,
                              "steps": [{"op": "不存在的op"}]})
     check("未知 op 被拒", bad, why)
+    # 拒绝要指出是**第几步**（前端据此把链上那一步标红，而不是笼统报错）。
+    # 用"最后一个非法"来钉：idx 必须是 1，不能恒为 0。
+    bad, why, idx = _reject({"mode": "parallel", "fileIds": ids,
+                             "steps": [{"op": "tags"}, {"op": "不存在的op"}]})
+    check("拒绝时指出是第几步（不是恒为 0）", bad and idx == 1, (bad, idx, why))
     bad, why, idx = _reject({"mode": "parallel", "fileIds": ids,
                              "steps": [{"params": {}}]})
     check("没有 op 的步骤被拒（卡片删了也要带 op 快照）", bad, why)

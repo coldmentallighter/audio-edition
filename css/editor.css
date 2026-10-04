@@ -57,7 +57,13 @@
 .pspec__check { display: inline-flex; align-items: center; gap: 7px; padding-top: 7px;
   font-size: 12.5px; cursor: pointer; }
 
-.iconpick { display: flex; flex-wrap: wrap; gap: 6px; }
+/* ⚠ 这一条**只给卡片编辑器那个容器**（`#cardIcons`），别写成裸 `.iconpick`：
+   本文件在 `drawer.css` **之后**加载，而预设模态的容器也带 `.iconpick` 类
+   （`#presetIcons.iconpick.iconpick--preset`）。两条规则同特异性 (0,1,0)，
+   于是这里的 `display: flex` 会**悄悄压掉** drawer.css 里给预设写的
+   `display: grid` —— 表现是"设了网格却不生效、格子还是 flex 换行"
+   （踩过：`grid-template-columns` 算出来了，`display` 却还是 flex）。 */
+#cardIcons.iconpick { display: flex; flex-wrap: wrap; gap: 6px; }
 .iconpick__btn {
   width: 34px; height: 34px; display: grid; place-items: center;
   color: var(--ink);

@@ -1,4 +1,4 @@
-"""69 张内置卡片。
+"""71 张内置卡片。
 
 全部只靠"同 op、不同参数组合"堆出来 —— 新增卡片时如果落在已有 op 上，
 这个文件是唯一要改的地方（见 布局规格.md 第 11 节）。
@@ -8,6 +8,17 @@ from __future__ import annotations
 from typing import Any
 
 # ---------------------------------------------------------------- 内置卡片
+
+#: **故意没有卡片**的操作。
+#:
+#: `smoke_api.py` 有一条硬断言「每个操作都至少有一张内置卡（否则用户没入口）」——
+#: 它防的是"加了 op 忘了配卡"。但有的 op 就是**没有界面入口**、只作为执行链的一步
+#: 存在，那就在这里显式登记，而不是把断言删掉（删了那条守卫就没了）。
+#:
+#:   · `loudness` —— 只算 + 缓存时间线，界面上什么都看不到；出东西的是
+#:     `loudness-image`（SVG）与 `loudness-report`（Markdown）两张卡。
+#:     老板 2026-10："删除响度总览图 这张卡。"卡删了，**op 保留**（链上还按 op 引用）。
+NO_CARD_OPS: frozenset[str] = frozenset({"loudness"})
 
 BUILTIN_CARDS: list[dict[str, Any]] = [
     {"id": "b_convert_flac", "cat": "格式转换", "name": "转 FLAC",
@@ -69,20 +80,21 @@ BUILTIN_CARDS: list[dict[str, Any]] = [
      "desc": "批量打包为一个压缩包", "tier": "一键", "ico": "zip",
      "op": "zip", "params": {}},
 
-    # 响度分析（新增的两个 op 各至少一张卡：没有卡片的操作在抽屉里没有入口，
-    # 自检 tests/smoke_api.py 里有一条硬断言盯着这件事）
-    {"id": "b_loudness", "cat": "响度", "name": "响度总览图",
-     "desc": "ebur128 逐帧响度 + 8 项指标（Integrated / LRA / PLR / 真峰值）",
-     "tier": "一键", "ico": "gain", "op": "loudness", "params": {"force": False}},
+    # 响度分析。**2026-10 删掉了「响度总览图」（`op: loudness`）那张卡** ——
+    # 老板："删除响度总览图 这张卡"。它 `produce=none`、`gives=none`，跑完只是把
+    # 时间线写进缓存，界面上什么都看不到；真正出东西的是下面两张（SVG / Markdown）。
+    # `op: loudness` 本身**保留** —— 执行链里还按 op 引用它，删的只是抽屉里的入口。
     {"id": "b_loudness_image", "cat": "响度", "name": "导出响度分析图",
-     "desc": "渲染成 PNG（双色包络 + 非线性纵轴 + 时间刻度 + 8 项指标），"
+     "desc": "渲染成 SVG 整页（纵轴标尺 + 双色包络 + 总响度虚线 + 时间带 + 三张卡），"
              "落 outputs/loudness/",
      "tier": "配置", "ico": "gain", "op": "loudness-image",
-     # `highLufs` 留空 = 自动（Integrated + LRA/2）。
-     # ⚠ 这个键**改过一次名**（原 `headLufs`）—— 改名时漏改这张卡，
-     # `smoke_api.py` 的"72 张内置卡片全部通过参数校验"当场就红了。
-     # 内置卡片是**数据**不是代码，改参数名一定要全库搜一遍。
-     "params": {"width": 2400, "refLufs": -23, "highLufs": "", "force": False}},
+     # ⚠ **参数表 2026-10 变了**：`highLufs`（红带下界）**已删除** —— 红区现在固定在
+     # −3 LUFS（老板定），不再是从 `Integrated + LRA/2` 推的可配阈值。
+     # 内置卡片是**数据**不是代码，改参数名一定要全库搜一遍（这里历史上就漏改过一次：
+     # 原 `headLufs` 改名成 `highLufs` 时漏了这张卡，冒烟的"72 张内置卡片全部通过
+     # 参数校验"当场就红了）。`width` 也从 2400 改到 1200 —— SVG 的 `width` 只是
+     # **显示尺寸**，`viewBox` 固定是设计单位。
+     "params": {"width": 1200, "refLufs": -23, "force": False}},
     {"id": "b_loudness_report", "cat": "响度", "name": "响度分析报告",
      "desc": "写成 Markdown：汇总表 + 8 项指标 + 响度分区 + 最响/最轻时间点",
      "tier": "配置", "ico": "tag", "op": "loudness-report",

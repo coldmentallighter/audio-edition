@@ -8,10 +8,11 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import time
 import zipfile
 from pathlib import Path
 
-from backend import audio, config, formats, runner, store
+from backend import audio, config, formats, logs, runner, store
 from backend.formats import is_lossy
 from backend.queue import Context
 from backend.toolchain import toolchain
@@ -97,12 +98,61 @@ def _file_of(task: store.TaskRow) -> Path:
     p = f.path
     if not p.exists():
         raise RuntimeError(f"源文件不存在: {f.name}")
+    _guard_input(task, p)
     return p
 
 
-def _out_path(src: Path, suffix: str, subdir: str = "") -> Path:
-    """输出路径【永远由系统生成】，落在 outputs/ 下，不覆盖已有文件。"""
+def _guard_input(task: store.TaskRow, p: Path) -> None:
+    """拿到的东西**根本不是音频也不是图片**时，报一句人话（规则 R8）。
+
+    什么时候会发生：`tasks.file_id` 指向一个旁路产物（`.md` 报告 / `.zip`）。
+    正常路径下 `queue._publish_derived` 只交接 `derived` 音频产物，走不到这里；
+    但**历史库里已经有被错误交接的任务行**（`src_output` 指向 `.md`），
+    用户还可能从别的机器导入链快照 —— 那时 ffmpeg 只会抛
+    `Invalid data found when processing input`，用户完全看不出因果。
+
+    ⚠ **图片不算**：上传封面图会被自动探测、也能被 `zip` 收走，
+    那是合法场景（`probe` 读图片是有意义的，ffprobe 会给出容器信息）。
+    所以只有"既不是音频也不是图片"才拦。
+    """
+    if config.is_audio(p) or config.is_image(p):
+        return
+    from backend.cards.specs import op_of_task
+    from backend.cards import contract as _contract
+
+    op = op_of_task(task.type, task.params)
+    needs = _contract.needs_of(op) if op in _contract.CONTRACT else ()
+    if needs and "audio" not in needs:
+        return
+    raise RuntimeError(
+        f"这一步需要音频，但拿到的是 {p.suffix or '未知格式'} 文件（{p.name}）—— "
+        f"上一步交出的是**旁路产物**（波形图 / 响度图 / 响度报告 / 提取出的封面），"
+        f"它不会被递给下一步。把这一步移出链，或把执行链切成**并行档**"
+        f"（各步都直接作用于原文件）。")
+
+
+def _out_path(src: Path, suffix: str, subdir: str = "",
+              task: "store.TaskRow | None" = None) -> Path:
+    """输出路径【永远由系统生成】，落在 outputs/ 下，不覆盖已有文件。
+
+    **执行链的产物落进"本次执行的目录"**（`执行链打包与串行交接方案.md` §5）：
+
+        outputs/upload-20261002-f99a87/loudness/song.loudness.md
+        └────── 本次执行 ──────┘└─ 分类子目录 ─┘
+
+    理由：产物按 `unique_path` 加 `-1`/`-2` 堆在同一个 `outputs/loudness/` 里，
+    用户分不清"哪个是刚才那次跑出来的"（要求原文：**每一次执行链得到的产物
+    不能和另一次合并到一起**）。目录名带 `chain_id` 尾号 → 天生唯一、不会撞。
+
+    **非链任务（右键菜单 / 单卡执行）保持旧路径**：那些是一次性动作，
+    没有"哪一次执行"的语义，改了只会让所有存量断言与用户习惯一起变。
+    """
     base = config.OUTPUTS / subdir if subdir else config.OUTPUTS
+    if task is not None and task.chain_id:
+        started = store.chain_started_at(task.chain_id) or time.time()
+        base = config.OUTPUTS / config.run_dir_name(task.chain_id, started)
+        if subdir:
+            base = base / subdir
     base.mkdir(parents=True, exist_ok=True)
     return config.unique_path(base / f"{src.stem}{suffix}")
 
@@ -137,7 +187,10 @@ def h_probe(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     if not info.ok:
         return False, {}, info.error
     ctx.progress(90)
-    store.set_file_info(task.file_id, info.as_dict())        # type: ignore[arg-type]
+    # **合并**而不是覆盖：probe 读不出响度（ffprobe 只读元数据、不解码），
+    # 整体覆盖等于"每探测一次就把已经测出来的响度擦掉"。文件内容真的换了的话，
+    # 旧测量值在 `store.add_file` 那一步就已经被丢掉了（`_forget_measurements`）。
+    store.merge_file_info(task.file_id, info.as_dict())      # type: ignore[arg-type]
     return True, info.as_dict(), ""
 
 
@@ -236,7 +289,7 @@ def h_convert(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         # wav / aiff / aac 以及用户主动取消封面时，只映射音频
         args += ["-map", "0:a"]
 
-    out = _out_path(src, f".{target}")
+    out = _out_path(src, f".{target}", task=task)
     args.append(str(out))
 
     ctx.progress(30)
@@ -264,7 +317,8 @@ def h_tag_edit(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         return False, {}, r.error
     ctx.progress(100)
     after = audio.read_tags(p)
-    store.set_file_info(task.file_id, audio.probe(p).as_dict())   # type: ignore[arg-type]
+    # 改标签会**重写**文件，但音频没动 —— 响度测量值仍然有效，所以合并而不是覆盖。
+    store.merge_file_info(task.file_id, audio.probe(p).as_dict())   # type: ignore[arg-type]
     return True, {
         "method": r.method,
         "written": r.written,
@@ -293,7 +347,8 @@ def h_cover_embed(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     if not r.ok:
         return False, {}, r.stderr_summary
     ctx.progress(100)
-    store.set_file_info(task.file_id, audio.probe(p).as_dict())   # type: ignore[arg-type]
+    # 嵌封面只动元数据/图片流，音频没动 → 响度测量值保留（合并，别整体覆盖）
+    store.merge_file_info(task.file_id, audio.probe(p).as_dict())   # type: ignore[arg-type]
     # 文件变了，旧封面缓存必须作废，否则 /cover 还在回上一张图
     audio.drop_cover_cache(task.file_id or "")
     return True, {"cover": img.name, "command": r.args}, ""
@@ -301,7 +356,7 @@ def h_cover_embed(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
 
 def h_cover_extract(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     p = _file_of(task)
-    out = _out_path(p, ".jpg", subdir="covers")
+    out = _out_path(p, ".jpg", subdir="covers", task=task)
     ctx.progress(30)
     got = audio.extract_cover(p, out)
     if not got:
@@ -320,7 +375,8 @@ def h_cover_remove(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     if not r.ok:
         return False, {}, r.stderr_summary
     ctx.progress(100)
-    store.set_file_info(task.file_id, audio.probe(p).as_dict())   # type: ignore[arg-type]
+    # 同理：删封面不动音频，响度测量值必须留住
+    store.merge_file_info(task.file_id, audio.probe(p).as_dict())   # type: ignore[arg-type]
     audio.drop_cover_cache(task.file_id or "")
     return True, {"removed": True}, ""
 
@@ -358,7 +414,7 @@ def h_normalize(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
                f":offset={measured.get('target_offset')}")
     af += ":linear=true"
 
-    out = _out_path(src, f".norm{src.suffix}")
+    out = _out_path(src, f".norm{src.suffix}", task=task)
     norm_args = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
         "-af", af, "-map", "0:a",                    # 归一化只处理音频
@@ -373,11 +429,44 @@ def h_normalize(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         return False, {}, r2.stderr_summary
 
     ctx.progress(100)
+    # 第一遍已经测出来了，顺手落库 —— 卡片上那行「Loudness」的数据来源。
+    # `input_i` 就是**整段素材的积分响度**（LUFS，带门限），正是 UI 要显示的值。
+    _store_measurements(task.file_id, {
+        "loudness": measured.get("input_i"),
+        "truePeak": measured.get("input_tp"),
+        "loudnessRange": measured.get("input_lra"),
+    })
     return True, {
         **_artifact(out),
         "targetLufs": target,
         "measured": measured,
     }, ""
+
+
+def _store_measurements(fid: str | None, values: dict) -> None:
+    """把**内容测量值**（响度一组）合并进文件记录，卡片上那行「Loudness」用它。
+
+    只认 `store.MEASUREMENT_KEYS` 里的键（单一事实源：哪些字段是"必须解码才拿得到"
+    的，由 store 那边定义，这里不抄第二份），缺项/取不到就跳过 —— 别写 `null` 进去，
+    那会让前端分不清"没测过"和"测出来是空"。
+
+    ⚠ 上游给的多半是**字符串**（ffmpeg 的 loudnorm JSON 里 `"input_i": "-19.30"`），
+    所以要在这里转数字：`info.loudness` 一旦是字符串，前端 `Number()` 能兜住，
+    但任何拼接/比较都会变成字符串语义。
+    """
+    if not fid:
+        return
+    patch: dict = {}
+    for key in store.MEASUREMENT_KEYS:
+        v = (values or {}).get(key)
+        if v is None or v == "":
+            continue
+        try:
+            patch[key] = round(float(v), 2)
+        except (TypeError, ValueError):
+            continue
+    if patch:
+        store.merge_file_info(fid, patch)
 
 
 def _parse_loudnorm(stderr: str) -> dict:
@@ -449,6 +538,39 @@ def _unique_dst(dst: Path) -> Path:
             return cand
     raise RuntimeError(f"无法为 {dst.name} 找到可用文件名")
 
+#: tag 名的别名表。ffprobe 吐出来的键名没有统一大小写，取决于容器：
+#:   FLAC（Vorbis comment）  TRACKNUMBER / TITLE / ARTIST / ALBUM（大写）
+#:   MP3（ID3v2）            TRCK / TIT2 ...
+#:   M4A / MP4               trkn / ©nam ...
+#: 精确匹配只命中其中一种，表现就是"那一行永远是 —"（TrackNumber 实测踩过）
+#: 或"占位符原样留在文件名里"（`{tracknumber:02}`）。
+#: 只列**同一含义的多种拼法**，不做跨字段猜测。
+_TAG_ALIASES: dict[str, tuple[str, ...]] = {
+    "track":       ("track", "tracknumber", "trck", "track_number"),
+    "tracknumber": ("tracknumber", "track", "trck", "track_number"),
+    "disc":        ("disc", "discnumber", "tpos", "disc_number"),
+    "discnumber":  ("discnumber", "disc", "tpos", "disc_number"),
+    "date":        ("date", "year"),
+}
+
+
+def _tag(tags: dict, *names: str) -> str:
+    """按一组候选名**大小写不敏感**地取标签值，取不到返回空串。
+
+    ⚠ 不能直接 `tags.get("track")` —— 见上面 `_TAG_ALIASES` 的注释。
+    先做一次小写索引再查，避免每个调用点各写一遍 `.lower()`。
+    """
+    low = {str(k).lower(): v for k, v in (tags or {}).items()}
+    for n in names:
+        v = low.get(n.lower())
+        if v:
+            return str(v).strip()
+    return ""
+
+
+def _tag_for(tags: dict, key: str) -> str:
+    """按**归一化后的短名**取标签（`_TAG_ALIASES` 里有别名就一起试）。"""
+    return _tag(tags, key, *_TAG_ALIASES.get(key, ()))
 
 def _render_pattern(pattern: str, tags: dict[str, str], src: Path) -> str:
     """支持 {title} {artist} {album} {tracknumber} {date} 等占位符。
@@ -465,7 +587,7 @@ def _render_pattern(pattern: str, tags: dict[str, str], src: Path) -> str:
         if key in ("filename", "name"):
             v = src.stem
         else:
-            v = tags.get(key, "") or ""
+            v = _tag_for(tags, key)
         if width and v:
             try:
                 n = int(width)
@@ -489,6 +611,115 @@ def _render_pattern(pattern: str, tags: dict[str, str], src: Path) -> str:
 
 # ---------------------------------------------------------------- loudness
 
+def _size_text(n: int) -> str:
+    for unit, div in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
+        if n >= div:
+            return f"{n / div:.1f} {unit}"
+    return f"{n} B"
+
+
+def _algorithm_text() -> str:
+    """元数据卡「测量算法」那一格的值。
+
+    卡只有 200pt 宽：标签「测量算法」14pt 占 ~56pt，`ebur128 / FFmpeg <版本>`
+    即使降到 10pt 也要 ~121pt —— 放不下（实测会被截成 `ebur128 / FFmpeg 9.0…`）。
+    所以取短写法 `ebur128 <版本>`，版本号运行时从工具链读。
+    """
+    import re
+    try:
+        raw = toolchain.get("ffmpeg").version or ""
+    except Exception:                                          # noqa: BLE001
+        raw = ""
+    m = re.search(r"(\d+\.\d+(?:\.\d+)?)", raw)
+    return f"ebur128 {m.group(1)}" if m else "ebur128"
+
+
+def _cover_data_uri(p: Path, task: store.TaskRow,
+                    box: float = 100.0) -> str | None:
+    """把内嵌封面读出来、缩到合适尺寸、编成 **data URI**（直接嵌进 SVG）。
+
+    老板 2026-10："封面要嵌入。"
+
+    三个要点：
+
+    1. **必须缩小**。原图常见 1000–1500px，直接 base64 进 SVG 会让文件涨到几百 KB；
+       元数据卡里那个框是 `layout.COVER.w`（100pt），按 2× 取 200px 足够清晰。
+    2. 缩完统一转 **JPEG**（q=85）：PNG 封面转 JPEG 后体积通常小一个量级，而
+       100pt 的显示尺寸看不出差别。
+    3. **失败就当没有封面**（返回 `None`，渲染器画灰底占位）。提取要走 ffmpeg，
+       一个没有封面的文件不该让整张图失败。
+    """
+    import base64                                               # noqa: PLC0415
+    import io as _io                                            # noqa: PLC0415
+
+    # ⚠ 扩展名必须是 ffmpeg 认识的图片格式：`extract_cover` 把路径直接交给 ffmpeg，
+    # 由**扩展名**决定 muxer —— 写成 `.img` 会得到 "Unable to find a suitable output
+    # format"，然后被下面的 `except` 吞掉，表现成"这个文件没有封面"。实测踩过。
+    tmp = config.CACHE / f"loud-cover-{task.id}.jpg"
+    try:
+        if audio.extract_cover(p, tmp) is None:
+            return None
+        from PIL import Image                                    # noqa: PLC0415
+        with Image.open(tmp) as im:
+            im = im.convert("RGB")
+            side = max(64, int(round(box * 2)))                  # 2× 显示尺寸
+            im.thumbnail((side, side))
+            buf = _io.BytesIO()
+            im.save(buf, format="JPEG", quality=85, optimize=True)
+        return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+    except Exception as e:                                       # noqa: BLE001
+        # 不静默：封面嵌入失败要说出来，否则会被当成"这个文件本来就没封面"
+        logs.log(f"⚠ 封面嵌入失败（图上会画灰底占位）：{type(e).__name__}: {e}")
+        return None
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _render_loudness_page(task: store.TaskRow, p: Path, data: dict) -> str:
+    """组装一份响度时间线的**整页 SVG**（元数据 + 章节标记 + 内嵌封面）。
+
+    上色用的主题来自任务参数 `theme` / `themeMode` —— 那是**客户端在执行链那一刻**
+    读的 `data-theme` / `data-mode`（见 `app.js` 的 `currentTheme()`）。
+    没传就落到 t1 浅色，**确定性**：同样的输入永远出同样的图。
+    """
+    from backend import loudness_svg                            # noqa: PLC0415
+    from backend import theme as theme_mod                      # noqa: PLC0415
+
+    info = audio.probe(p)
+    tags = info.tags or {}
+    meta = {
+        "title":  _tag_for(tags, "title"),
+        "artist": _tag_for(tags, "artist"),
+        "album":  _tag_for(tags, "album"),
+        "track":  _tag_for(tags, "track"),
+        "duration": info.duration,
+        "channels": info.channels,
+        "sampleRate": info.sample_rate,
+        "bits": info.bits,
+        "sizeText": _size_text(info.size),
+        "algorithm": _algorithm_text(),
+    }
+    # 标记：音频自带的章节，有则加载、无则不出标记行（`chapters()` 自己吞异常）
+    markers = audio.chapters(p)
+    # DRP 的每一次出现（还没接线时 `summary` 里没有，就是空列表 -> 不出 PT 行）
+    s = data.get("summary") or {}
+    patterns = s.get("drpOccurrences") or []
+    # 认不出的主题值**不报错**，落回默认 —— 一张图不值得让整条链失败
+    th, md = theme_mod.normalize(task.params.get("theme"), task.params.get("themeMode"))
+    return loudness_svg.render_loudness_svg(
+        data,
+        title=p.name,
+        meta=meta,
+        markers=markers,
+        patterns=patterns,
+        cover=_cover_data_uri(p, task) if info.has_cover else None,
+        ref_lufs=float(task.params.get("refLufs", -23.0)),
+        width=(float(task.params["width"]) if task.params.get("width") else None),
+        theme=th,
+        mode=md,
+    )
+
+
 def h_loudness(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     """响度分析：ebur128 单趟拿时间线 + 8 项指标，按文件缓存。
 
@@ -497,14 +728,12 @@ def h_loudness(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     （路由塞进去的，见 `routers/ops.py`）：
 
       · `loudness`         —— 只算 + 缓存，前端聚焦时画 Canvas
-      · `loudness-image`   —— 额外渲染一张 **PNG** 落 `outputs/loudness/`
+      · `loudness-image`   —— 额外渲染一张 **SVG** 落 `outputs/loudness/`
       · `loudness-report`  —— 额外写一份 **Markdown 报告** 落 `outputs/loudness/`
 
-    **PNG 是纯 PIL 画的**（`audio.render_loudness_png`），不是"画成 rawvideo
-    再喂 ffmpeg"那条路 —— 后者要么自己写字体位图、要么依赖 `drawtext`
-    找系统中文字体，两者都比"PIL + DejaVu"脆得多。纵轴走 `AXIS_Y`
-    分段控制点（非线性，有效响度区被放大），规格见
-    `响度总览图（LoudnessAnalysis）实现构想.md` §3。
+    **图是 SVG，不是 PNG**：版式唯一来源 `backend/chart_layout.py`（从 `大致布局.ai`
+    实测），纵轴唯一来源 `backend/chart_axis.py`（F 轴：上界 +0.3 / 拐点 −30 /
+    上段线性 70%，9 个刻度全出文字，红区 −3）。渲染器 `backend/loudness_svg.py`。
 
     三个 op 都**只读源文件**，产物全部落 `outputs/`。
     """
@@ -516,6 +745,19 @@ def h_loudness(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     except RuntimeError as e:
         return False, {}, str(e)
     ctx.progress(75)
+
+    # 顺手把测量值落库：卡片上那行「Loudness」以前只在**跑过标准化**之后才有
+    # （而且 `h_normalize` 当时根本没在存），现在只要跑过任意一个响度 op 就有。
+    # 三个 op 共用这一段，所以在分流**之前**写，一次就够。
+    s = data.get("summary") or {}
+    _store_measurements(task.file_id, {
+        "loudness": s.get("integrated"),
+        "truePeak": s.get("truePeakMax"),
+        "loudnessRange": s.get("lra"),
+        "samplePeak": s.get("samplePeakMax"),
+        "dra": s.get("dra"),
+        "drp": s.get("drp"),
+    })
 
     out: dict = {
         "key": data.get("key"),
@@ -537,7 +779,7 @@ def h_loudness(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
             )
         except Exception as e:                       # noqa: BLE001
             return False, {}, f"渲染报告失败：{type(e).__name__}: {e}"
-        dest = _out_path(p, ".loudness.md", subdir="loudness")
+        dest = _out_path(p, ".loudness.md", subdir="loudness", task=task)
         dest.write_text(md, encoding="utf-8")
         ctx.progress(100)
         out.update({
@@ -548,26 +790,24 @@ def h_loudness(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         return True, out, ""
 
     if task.params.get("_op") == "loudness-image":
-        # 把时间线画成 PNG（路线 B）。规格见 响度总览图实现构想.md §3。
-        try:
-            png = audio.render_loudness_png(
-                data,
-                title=p.stem,
-                ref_lufs=float(task.params.get("refLufs", -23.0)),
-                high_lufs=(float(task.params["highLufs"])
-                           if task.params.get("highLufs") not in (None, "")
-                           else None),
-                width=int(task.params.get("width") or audio.PNG_W),
-            )
-        except Exception as e:                       # noqa: BLE001
-            return False, {}, f"渲染响度图失败：{type(e).__name__}: {e}"
-        dest = _out_path(p, ".loudness.png", subdir="loudness")
-        dest.write_bytes(png)
+        # 把时间线画成 **SVG** 整页（版式见 backend/chart_layout.py，纵轴见
+        # backend/chart_axis.py，渲染器见 backend/loudness_svg.py）。
+        #
+        # 为什么不是 PNG：① 中文不会退化成 `?`（PNG 那条路找不到系统 CJK 字体就用
+        # `?` 顶替，而标记名实测可能是 `标记 0` 这种中文）；② 颜色按用户执行链那一刻的
+        # 主题**算成实色烘进文件**（2026-10 改的，见 `_render_loudness_page`）；
+        # ③ 矢量，任意缩放；④ 是文本，测试能直接断言坐标与颜色。
+        #
+        # ⚠ 每次都重写这个文件（没有"已存在就跳过"）—— 换主题再跑一次链必须出新的颜色。
+        # 缓存的是**时间线**（与主题无关），不是这张图。
+        svg = _render_loudness_page(task, p, data)
+        dest = _out_path(p, ".loudness.svg", subdir="loudness", task=task)
+        dest.write_text(svg, encoding="utf-8")
         ctx.progress(100)
         out.update({
             **_artifact(dest),
             "kind": "image",
-            "width": int(task.params.get("width") or audio.PNG_W),
+            "format": "svg",
         })
         return True, out, ""
 
@@ -611,7 +851,7 @@ def h_waveform(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         filt += f":scale={scale}"
     filt += "," + _WAVE_SNAP
 
-    out = _out_path(src, ".png", subdir="waveforms")
+    out = _out_path(src, ".png", subdir="waveforms", task=task)
     bg = WAVE_BACKGROUNDS[bg_key]
 
     ctx.progress(25)
@@ -667,46 +907,61 @@ def h_verify(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
 # ---------------------------------------------------------------- zip
 
 def h_zip(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
-    """打包一批文件为 ZIP（需求 §4.6）。file_ids 放在 params 里。
+    """打包一批文件为 ZIP（需求 §4.6 + `执行链打包与串行交接方案.md` §4）。
 
-    **装什么**（方案 §3.2.3）：对每个文件，沿链往前找"最后一个产出过文件的那一步"：
-      · 那一步成功且产出可打包的东西 → 装**它的产物**
-      · 那一步失败/取消/跳过 → **这个文件不进 ZIP**（§9.7：绝不回落，更不回落到源文件）
-      · 前面没有任何产出（`打包` 自己是第一项，或前面只有 probe/校验这类）→ 装源文件
+    **装什么 = 打包窗口里的终产物**。窗口是
+    「上一个打包步骤（不含）」→「本次打包步骤（不含）」，两种档位规则不同：
 
-    所以 `转 FLAC → 标准化 → 打包` 拿到的是成品，而 `打包` 单独一张仍然打包源文件。
+      · **串行**：每个文件取窗口内**最后一个音频产物**（`转 FLAC → 标准化 → 打包`
+        装的是标准化后的那份），外加窗口内**全部旁路产物**（波形/响度图/报告/封面）
+      · **并行**：窗口内**全部**非 zip 产物（`转 FLAC → 转 MP3 → 打包` 两个都装）
+      · 该文件在窗口内没有任何产物、也没有失败 → 装**源文件**
+        （`探测 → 打包`、`打包` 单独一张都是这条）
+      · 窗口内有失败 → 串行整份跳过（§9.7 **不回落**）；并行装成功的那部分并在
+        `warnings` 里点名少装了什么（并行各步互不依赖，"装能装的 + 说清"更有用）
 
-    `result` 里回两个东西（**ZIP 里装了什么必须能查**）：
-      · `sources` —— 每个成员来自哪一步（`step2:convert` / `source`）
-      · `skipped` —— 哪些文件**没进**以及为什么
+    产物落 `outputs/<本次执行的目录>/`，名字是
+    `upload-<日期>-<来源卡片名…>.zip`（§4.5 / §5）。
+
+    `result` 里回四样东西（**ZIP 里装了什么必须能查**）：
+      · `sources`  —— 每个成员来自哪一步（`step2:convert` / `source`）
+      · `skipped`  —— 哪些文件**没进**以及为什么
+      · `warnings` —— 进了但**少装了东西**的（并行档的部分失败）
+      · `window`   —— 这次收集的是哪一段（`{from, to}`，排查"为什么没装某个产物"）
     """
     ids = task.params.get("fileIds") or []
     if not ids:
         return False, {}, "没有要打包的文件"
 
-    # 链上解算：拿到"要装的路径 + 来源说明"，或"这个文件不装 + 原因"
-    plans, skipped = _zip_plan(task, ids)
+    plans, skipped, warnings, step_names, window = _zip_plan(task, ids)
     if not plans:
         return False, {}, ("没有任何文件可以打包："
                            + "；".join(f"{n}（{w}）" for n, w in skipped) if skipped
                            else "没有可打包的文件")
+    for w in warnings:
+        logs.warn(f"⚠ 打包：{w}")
 
-    out = _out_path(Path("batch"), ".zip", subdir="zips")
+    out = _zip_out_path(task, step_names)
     sources: list[dict] = []
+    names_taken: set[str] = set()
     n = 0
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        for i, (fid, path, from_, display) in enumerate(plans):
+        for i, item in enumerate(plans):
+            fid, path, from_, display, step = item
             if not path.exists():
                 skipped.append((display, "产物已不在磁盘上"))
                 continue
-            # arcname 用**可读的文件名**：源文件保持它在 uploads 里的相对路径，
-            # 产物用它的文件名。直接用 rel_path 的话产物会变成
+            # arcname 用**可读的文件名**：源文件保持它在 uploads 里的相对路径
+            # （保留子目录），产物用文件名。直接用 rel_path 的话产物会变成
             # "song.norm.flac" 这种没有目录上下文的名字，而源文件带子目录 ——
             # 混在一起解压出来分不清谁是谁。
-            arc = display
+            #
+            # ⚠ 同一个包里的成员名**必须唯一**（zip 允许重名，但解压时会互相覆盖）：
+            # 并行档一个文件可能同时装了 `song.flac` 与另一步产出的同名文件。
+            arc = _unique_arcname(z, display, names_taken)
             z.write(path, arcname=arc)
             sources.append({"fileId": fid, "arcname": arc, "from": from_,
-                            "bytes": path.stat().st_size})
+                            "step": step, "bytes": path.stat().st_size})
             n += 1
             ctx.progress(10 + 85 * (i + 1) / len(plans))
     ctx.progress(100)
@@ -714,23 +969,84 @@ def h_zip(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         **_artifact(out),
         "files": n,
         "sources": sources,
-        # 没进 ZIP 的文件**必须列出来**，否则用户拿到一个"看起来成功"的包，
-        # 永远不知道里面少了一个
         "skipped": [{"name": nm, "reason": rs} for nm, rs in skipped],
+        "warnings": warnings,
+        "window": window,
     }, ""
 
 
-def _zip_plan(task: store.TaskRow, ids: list[str]) -> tuple[list, list]:
-    """为 ZIP 解算每个文件要装的路径。→ `(plans, skipped)`。
+def _unique_arcname(z: zipfile.ZipFile, name: str, taken: set[str]) -> str:
+    """包内成员名去重（`song.flac` → `song-1.flac`）。只影响 zip 内部。"""
+    if name not in taken and name not in z.namelist():
+        taken.add(name)
+        return name
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    for i in range(1, 10000):
+        cand = f"{stem}-{i}.{ext}" if ext else f"{name}-{i}"
+        if cand not in taken and cand not in z.namelist():
+            taken.add(cand)
+            return cand
+    taken.add(name)
+    return name
+
+
+def _zip_out_path(task: store.TaskRow, step_names: list[str]) -> Path:
+    """ZIP 的落点。
+
+    链上 → **本次执行的产物目录**（`outputs/upload-<日期>-<chain 末6>/`，§5）；
+    非链（右键菜单/单卡）→ 保持旧的 `outputs/zips/`（存量行为不变）。
+    """
+    if task.chain_id:
+        started = store.chain_started_at(task.chain_id) or time.time()
+        base = config.OUTPUTS / config.run_dir_name(task.chain_id, started)
+        date = config.run_date(started)
+    else:
+        base = config.OUTPUTS / "zips"
+        date = config.run_date(time.time())
+    base.mkdir(parents=True, exist_ok=True)
+    return config.unique_path(base / config.zip_filename(date, step_names))
+
+
+def _zip_plan(task: store.TaskRow, ids: list[str]) -> tuple[list, list, list, list, dict]:
+    """按**打包窗口**解算每个文件要装的东西。
+
+    → `(plans, skipped, warnings, step_names, window)`
+      · `plans` 每项 `(file_id, 路径, 来源说明, 包内名, 步骤号)`（源文件步骤号 = -1）
+      · `step_names` 被装入产物的那些步骤的**卡片名**（给 ZIP 命名，§4.5）
 
     这是 §9.7 那条"不回落"的落点，也是最容易写错的一处：
     **一旦链上断过，就不能再往前找、也不能回落到源文件** ——
     那等于静默交出一个用户没要的文件。
     """
-    plans: list[tuple[str, Path, str, str]] = []
+    plans: list[tuple[str, Path, str, str, int]] = []
     skipped: list[tuple[str, str]] = []
+    warnings: list[str] = []
     chain_id = task.chain_id
-    step_idx = task.step_idx if task.step_idx is not None else 0
+
+    if not chain_id:
+        # 不在链上（右键菜单/单卡执行）→ 旧行为：打包源文件
+        for fid in ids:
+            f = store.get_file(fid)
+            if not f or f.state == "deleted":
+                skipped.append((fid[:8], "文件不存在或已删除"))
+                continue
+            if not f.path.exists():
+                skipped.append((f.name, "工作副本已不在磁盘上"))
+                continue
+            plans.append((fid, f.path, "source", f.rel_path, -1))
+        return plans, skipped, warnings, ["源文件"], {"from": 0, "to": 0}
+
+    # ⚠ **在真正开打之前重新解算一次**，不要用传进来的 `task` 快照：
+    # 屏障那边的等待是有时限的（`ATTACH_GRACE`），过了时限就放行，
+    # 而那一刻上游可能刚刚成功、产物回填还在飞。
+    fresh = store.get_task(task.id) or task
+    step_idx = int(fresh.step_idx if fresh.step_idx is not None else 0)
+    win = store.chain_zip_window(chain_id, step_idx)
+    serial = (fresh.chain_mode == "serial")
+    states = {(t["file_id"], t["step_idx"]): t for t in win["tasks"]}
+    used_steps: set[int] = set()
 
     for fid in ids:
         f = store.get_file(fid)
@@ -743,50 +1059,80 @@ def _zip_plan(task: store.TaskRow, ids: list[str]) -> tuple[list, list]:
             # 看不出因果的"链上没有可用的产物"。
             skipped.append((f.name, "工作副本已不在磁盘上"))
             continue
-        if not chain_id:
-            # 不在链上（右键菜单/单卡执行）→ 旧行为：打包源文件
-            plans.append((fid, f.path, "source", f.rel_path))
-            continue
 
-        # ⚠ **在真正开打之前重新解算一次**，不要用传进来的 `task` 快照。
-        #
-        # 为什么：汇总任务被 worker 取走时（`_run_one` 开头 `store.get_task`），
-        # 上游可能**刚刚**成功、它的产物回填还在飞；屏障那边的等待是有时限的
-        # （`ATTACH_GRACE`），过了时限就放行。于是 `task.params` 里没有产物信息，
-        # ZIP 就装走了源文件 —— 表现是**偶发**。
-        fresh = store.get_task(task.id) or task
-        step_idx = fresh.step_idx if fresh.step_idx is not None else step_idx
+        if serial:
+            # 沿**派生血缘**往前走：源文件 → 产物行 → 它的产物 ……（一次遍历搞定，
+            # 因为 `win["artifacts"]` 已按 step 排序）。边走边收集：
+            # 最后一个音频产物 = 文件走到窗口末尾时的形态；沿途的旁路产物全收。
+            lineage = {fid}
+            picked: list[dict] = []
+            last_audio: dict | None = None
+            for a in win["artifacts"]:
+                if (a["producing_file_id"] or "") not in lineage:
+                    continue
+                if a["produce"] == "derived":
+                    last_audio = a          # 后出现的取代先出现的
+                else:
+                    lineage.add(a["row_id"])
+                    picked.append(a)
+            if last_audio is not None:
+                lineage.add(last_audio["row_id"])
+                picked.insert(0, last_audio)
 
-        # 先看"链上有没有派生产物" —— 这是一次确定性的 JOIN（`files.derived_from`
-        # → 任务 → chain_id/step_idx），不依赖任何"谁先跑完"的时序。
-        # 它比沿任务行推导可靠得多（那条路曾是"偶发装源文件"的根源）。
-        art = store.chain_derived_artifact(chain_id, fid, step_idx)
-        if art:
-            src = config.OUTPUTS / str(art["relPath"]).replace("\\", "/")
-            if src.exists():
-                plans.append((fid, src, f"step{art['step']}:{art['type']}", src.name))
+            bad = [t for t in win["tasks"]
+                   if t["file_id"] in lineage
+                   and t["state"] in ("failed", "cancelled", "skipped")]
+            if bad:
+                # 串行：断过就整份跳过（不回落、也不装更早的产物）
+                b = sorted(bad, key=lambda t: t["step_idx"])[0]
+                skipped.append((f.name, f"第 {b['step_idx'] + 1} 步"
+                                        f"（{b['type']}）{_state_cn(b['state'])}"))
                 continue
-
-        anchor = store.chain_started_at(chain_id)
-        got = store.chain_final_artifact(chain_id, fid, step_idx, before_ts=anchor)
-        if got is None:
-            # 链上断过 → 这个文件没有可交付的产物。**不回落**（§9.7），
-            # 但要说清是哪一步断的 —— 用户才知道该去修哪里。
-            rows = store.tasks_before(chain_id, step_idx, fid, before_ts=anchor)
-            last = rows[0] if rows else None
-            if last is not None:
-                skipped.append((f.name,
-                                f"第 {int(last.step_idx or 0) + 1} 步"
-                                f"（{last.type}）{_state_cn(last.state)}"))
-            else:
-                skipped.append((f.name, "链上没有可用的产物"))
+            if not picked:
+                plans.append((fid, f.path, "source", f.rel_path, -1))
+                continue
+            for a in picked:
+                path = config.OUTPUTS / str(a["rel_path"]).replace("\\", "/")
+                if not path.exists():
+                    skipped.append((f.name, f"第 {a['step'] + 1} 步的产物已不在磁盘上"))
+                    continue
+                used_steps.add(a["step"])
+                plans.append((fid, path, f"step{a['step'] + 1}:{a['type']}",
+                              a["name"], a["step"]))
             continue
-        path, from_ = got
-        # arcname：源文件用它在 uploads 里的相对路径（保留子目录），
-        # 产物用文件名 —— 混在一起解压出来才分得清
-        arc = f.rel_path if from_ == "source" else path.name
-        plans.append((fid, path, from_, arc))
-    return plans, skipped
+
+        # 并行：窗口内**全部**非 zip 产物（各步都作用于同一个源文件，没有血缘）
+        mine = [a for a in win["artifacts"] if (a["producing_file_id"] or "") == fid]
+        bad = [t for t in win["tasks"]
+               if t["file_id"] == fid
+               and t["state"] in ("failed", "cancelled", "skipped")]
+        if not mine and bad:
+            b = sorted(bad, key=lambda t: t["step_idx"])[0]
+            skipped.append((f.name, f"第 {b['step_idx'] + 1} 步"
+                                    f"（{b['type']}）{_state_cn(b['state'])}"))
+            continue
+        if not mine:
+            plans.append((fid, f.path, "source", f.rel_path, -1))
+            continue
+        for a in mine:
+            path = config.OUTPUTS / str(a["rel_path"]).replace("\\", "/")
+            if not path.exists():
+                skipped.append((f.name, f"第 {a['step'] + 1} 步的产物已不在磁盘上"))
+                continue
+            used_steps.add(a["step"])
+            plans.append((fid, path, f"step{a['step'] + 1}:{a['type']}",
+                          a["name"], a["step"]))
+        if bad:
+            # 并行：**装成功的 + 点名少装了什么**（与串行的"整份跳过"有意不同）
+            b = sorted(bad, key=lambda t: t["step_idx"])[0]
+            warnings.append(
+                f"{f.name}：第 {b['step_idx'] + 1} 步（{b['type']}）"
+                f"{_state_cn(b['state'])}，只装了这个文件成功的 {len(mine)} 个产物")
+
+    # 命名：只用**真的装了东西**的那些步骤名（按链上顺序）
+    step_names = [win["steps"][s]["name"] for s in sorted(used_steps)
+                  if s in win["steps"]] or ["源文件"]
+    return plans, skipped, warnings, step_names, {"from": win["from"], "to": win["to"]}
 
 
 def _state_cn(state: str) -> str:
