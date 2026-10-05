@@ -289,6 +289,18 @@ def validate_steps(raw: Any, *, where: str = "") -> tuple[list[dict], list[str]]
     return good, why
 
 
+def _cover_args_for_preview(fmt: str, params: dict) -> tuple[list[str], str]:
+    """命令预览要的封面参数 —— **复用真正执行时那一个函数**。
+
+    在这里 import 而不是放模块顶部：`tasks` 的表在模块级构建，
+    而 `tasks` 自己会 `import formats/queue`，顶部互相 import 容易绕出环。
+    预览是低频路径（点一下卡片编辑器才走），函数内 import 没有性能问题。
+    """
+    from backend.tasks import _apply_cover_args
+    return _apply_cover_args([], None, fmt,
+                             keep_cover=bool(params.get("keepCover", True)))
+
+
 def render_preview(op: str, params: dict) -> str:
     """把参数代进模板，给用户看"这张卡等价于什么命令"。"""
     spec = OPS.get(op)
@@ -312,7 +324,12 @@ def render_preview(op: str, params: dict) -> str:
             extra += ["-ac", str(params["channels"])]
         if params.get("keepTags", True):
             extra += ["-map_metadata", "0"]
-        extra += ["-map", "0" if params.get("keepCover", True) else "0:a"]
+        # 封面的去留**走真正执行时那个函数**（`src=None` = 只看容器，不读磁盘）。
+        # 以前这里写的是 `-map 0 if keepCover else 0:a`，与真实行为对不上：
+        # 真跑到 WAV 时不会硬 map 封面（那会直接报错），而预览却显示 `-map 0` ——
+        # 预览的意义就是"你看到的命令就是会执行的那条"，对不上就失去意义了。
+        cover_args, _ = _cover_args_for_preview(fmt, params)
+        extra += cover_args
         tpl = tpl.replace("{codec}", codec).replace("{extra}", " ".join(extra))
 
     def sub(m):

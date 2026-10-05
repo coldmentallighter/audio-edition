@@ -66,7 +66,6 @@
   border-radius: var(--radius-card);
   box-shadow: var(--shadow-md);
   overflow: hidden;
-  --drawer-edge: 14px;               /* 左右留白 */
   --drawer-top: 854px;               /* 盒顶（JS 写） */
   --drawer-box: 73px;                /* 盒高（JS 写） */
   transition: top .34s cubic-bezier(.16,1,.3,1),
@@ -367,7 +366,7 @@ html[data-fx="off"] .snap:hover .snap__ico {
   cursor: pointer;
   transition: background .16s ease, color .16s ease;
 }
-.drawer__title--btn:hover { background: var(--surface-alt, rgba(255,255,255,.06)); }
+.drawer__title--btn:hover { background: var(--bg-surface-alt); }
 .drawer__title--btn:focus-visible {
   outline: 2px solid var(--border-strong); outline-offset: 2px;
 }
@@ -541,7 +540,7 @@ html[data-fx="off"] .snap:hover .snap__ico {
   background: transparent;
   border-style: dashed;
   border-color: var(--border-strong);
-  color: var(--text);
+  color: var(--ink);
 }
 /* 自动态下 hover：**别碰 border-style**（破了虚线就看不出是自动还是手选了）。
    玻璃渐变照抄 editor.css 那条 —— 3D 手感是同一个组件的一部分，不该因为"自动"就没。 */

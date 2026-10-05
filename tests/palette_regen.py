@@ -69,7 +69,7 @@ NEW = {
            "ink": "#554F65"},
 }
 
-# 当前 theme.css 里要用作"亮度模板"的令牌
+# 当前 ui/theme.css 里要用作"亮度模板"的令牌
 TEMPLATE = {
     "t2": {
         "bg-app": "#F4F9F4", "bg-surface-alt": "#D4DBD4",

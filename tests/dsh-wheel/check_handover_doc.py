@@ -33,7 +33,7 @@ def main():
 
     print("== files the doc references must exist ==")
     for rel in ("backend/audio.py", "backend/drp.py", "backend/toolchain.py",
-                "backend/theme.py", "theme.css",
+                "backend/theme.py", "ui/theme.css",
                 "tests/dsh-wheel/axis_spec.py", "tests/dsh-wheel/check_drp.py",
                 "tests/dsh-wheel/drp_truth.py",
                 "tests/dsh-wheel/cards_store_check.py",

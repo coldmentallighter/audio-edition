@@ -15,7 +15,6 @@
 :root {
   --font-sans:     "SourceHanSansCN", "Noto Sans SC", system-ui, sans-serif;
   --fs-body:       15px;
-  --fs-micro:      10px;
   --radius-workspace: 32px;
   --radius-card:      20px;
   --radius-cover:     15px;
@@ -24,9 +23,7 @@
   --gap-col:       29px;
   --header-h:      104px;
   --sidebar-w:     234px;
-  --drawer-h:      100px;
   --drawer-handle: 12px;
-  --z-drawer:      40;
   --z-notice:      60;
   /* 遮罩强度台阶。**必须偏"平"**：原来的 90/45/0 是为实心光晕调的，
      用在网点上会让远处那一圈直接淡到看不见 —— 那就只剩"近大"、没有"远小"了。

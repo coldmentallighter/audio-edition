@@ -13,7 +13,7 @@ except Exception:
     pass
 
 ROOT = Path(__file__).resolve().parent.parent
-CSS = (ROOT / "theme.css").read_text(encoding="utf-8")
+CSS = (ROOT / "ui" / "theme.css").read_text(encoding="utf-8")
 
 
 def hex2rgb(h):

@@ -1,0 +1,2921 @@
+/* ============================================================================
+   AudioEdition UI Kit —— 单文件构建产物，**不要手改**
+
+   由 `tools/build_ui_kit.py` 把 `ui/` 下的 10 个样式表按下面的顺序拼接而成。
+   **顺序不能改**：层叠结果依赖它（`editor.css` 最后一个加载，会覆盖前面同特异性
+   的规则；`.iconpick` 那个类名有两个主人，等等 —— 见 README.md「加载顺序」）。
+
+     1. ui/theme.css        令牌层：6 套主题 × 21 个设计令牌（必须第一）
+     2. ui/base.css         契约 + 重置 + 滚动条 + 视图过渡
+     3. ui/common.css       基础件：按钮 / 输入 / 徽章 / 主题色点
+     4. ui/header.css       顶栏 + 执行链 + 音量 + 分段开关 + 空状态
+     5. ui/layout.css       侧栏 + 工作区 + 选择条 / 批量栏 + 任务与日志
+     6. ui/filecard.css     文件卡片：波形 / 传输 / 元数据 / 封面 / 状态列
+     7. ui/drawer.css       抽屉 + 快照条 + 卡片库网格 + 预设与链编辑
+     8. ui/cardlib.css      卡片库：基础 / 光标跟随 / 点击反馈 / 对勾 + 搜索
+     9. ui/overlays.css     拖拽导入 / 上传进度 / 右键菜单 / 通知 / 模态
+    10. ui/editor.css       卡片编辑器 + 响应式
+
+   重新生成：python tools/build_ui_kit.py
+   同步校验：python tests/ui_check.py        （逐字节比对，源改了忘打包会红）
+
+   用法：`<html data-theme="t1">` 浅色 / `<html data-theme="t1" data-mode="dark">` 深色，
+   然后 `<link rel="stylesheet" href="audioedition-ui.css">` 一个文件就够。
+   完整契约与踩坑清单见同目录 README.md；可视化样例见同目录 gallery.html。
+
+   ⚠ 刻意**不做压缩**：这套样式的价值有一大半在注释里（每条规则为什么这么写、
+     哪个坑踩过），压缩会把它们全部删掉，还要为此引入工具链。
+   ============================================================================ */
+
+/* ==================== ui/theme.css ==================== */
+/* ============================================================================
+   AudioEdition 主题令牌  ——  由 配色方案.md 三套类型派生（空气感亮度标尺）
+   浅色 = 源色板原值 + 派生层级；深色 = 同色相暗色变体
+   全部配对经 WCAG 对比度实测，见 配色方案-落地规格.md
+   用法：浅色 <html data-theme="t1">
+         深色 <html data-theme="t1" data-mode="dark">
+
+   文字配对契约（务必遵守，深色模式下极易搞错）：
+     --bg-*   配 --ink
+     --tint-* 配 --ink        （软状态色，已求解为可读且可见）
+     --fill-* 配 --on-fill    （强色块）
+   ============================================================================ */
+
+/* ---------- 与主题无关的常量 ---------- */
+:root {
+  --font-sans:     "SourceHanSansCN", "Noto Sans SC", system-ui, sans-serif;
+  --fs-body:       15px;
+  --radius-workspace: 32px;
+  --radius-card:      20px;
+  --radius-cover:     15px;
+  --radius-inner:     10px;
+  --gap-card:      23px;
+  --gap-col:       29px;
+  --header-h:      104px;
+  --sidebar-w:     234px;
+  --drawer-handle: 12px;
+  --z-notice:      60;
+  /* 遮罩强度台阶。**必须偏"平"**：原来的 90/45/0 是为实心光晕调的，
+     用在网点上会让远处那一圈直接淡到看不见 —— 那就只剩"近大"、没有"远小"了。
+     现在各层在自己的 reach 内基本不透明，只在最外 38% 上淡出（避免出现硬边圈）。 */
+  --spot-a1: 100%;
+  --spot-a2: 75%;
+  --spot-a3: 0%;
+  --spot-mix-base: var(--fill-primary);
+  /* 卡片 hover 的彩色半调（AM 网点：**近处点大、远处点小**）。
+     四层同心网点共用一个格网原点，每层一个点径 + 自己的径向遮罩，
+     由外到内点径递增、遮罩 reach 递减 —— 越靠近光标，叠上来的点越大。
+     最外层（reach 最大）用第二色，所以远处是细的副 ink、近处被放大的主 ink 盖住。
+     --spot-a1/2/3 是每层共享的**强度台阶**，位置仍在光标处。 */
+  --spot-cell:    10px;                   /* 网点格距 */
+  --spot-dot-1:   18%;                    /* 最外层点径（占 closest-side 半径的比例） */
+  --spot-dot-2:   30%;
+  --spot-dot-3:   50%;
+  --spot-dot-4:   60%;                    /* 最里层点径 */
+  --spot-reach-1: 85%;                    /* 最外层的遮罩半径，逐层收窄 */
+  --spot-reach-2: 60%;
+  --spot-reach-3: 40%;
+  --spot-reach-4: 20%;
+  --spot-alt-a:   85%;                    /* 副 ink 强度，调 0 就只剩主 ink */
+  --spot-mix-alt: var(--fill-accent);     /* 副 ink 取第二色 */
+}
+
+/* ================= 类型1 蓝/橙  ·  浅色（空气感） ================= */
+:root[data-theme="t1"] {
+  /* 墨色 —— --bg-* 与 --tint-* 上的正文色；本套色板为浅色底，白字不可用 */
+  --ink:            #24445E;
+  --ink-accent:     #5e3f24;
+  --ink-error:      #245e28;
+  --text-muted:     rgb(36 68 94 / 0.62);
+  --text-disabled:  rgb(75 87 99 / 0.38);
+  /* 背景三层：白面 / 极浅页底 / 中性内嵌槽（配 --ink） */
+  --bg-app:         #F4F6F9;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-alt: #D4D8DB;
+  /* 强色块（配 --on-fill） */
+  --fill-primary:   #BDDBF8;
+  --fill-accent:    #f8e0bd;
+  --on-fill:        #24445E;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #E1E9F1;
+  --tint-accent:    #f0e9df;
+  --error-tint:     #f1e1e1;
+  --error-solid:    #aa4141;   /* 白字可用 */
+  /* 描边与投影 —— 空气感下层级主要靠它表达，shadow 不做大面积底色 */
+  --border:         rgb(75 87 99 / 0.22);
+  --border-strong:  rgb(75 87 99 / 0.45);
+  --shadow-sm:      0 1px 2px rgb(75 87 99 / 0.12);
+  --shadow-md:      0 4px 12px rgb(75 87 99 / 0.18);
+  --scroll-track:   #BDDBF8;
+  --scroll-thumb:   #F4F6F9;
+}
+
+/* ================= 类型1 蓝/橙  ·  深色 ================= */
+:root[data-theme="t1"][data-mode="dark"] {
+  --ink:            #F2F6FA;
+  --ink-accent:     #EAD1B8;
+  --ink-error:      #BBE8B0;
+  --text-muted:     rgb(242 246 250 / 0.62);
+  --text-disabled:  rgb(242 246 250 / 0.34);
+  --bg-app:         #11171C;
+  --bg-surface:     #1D252D;
+  --bg-surface-alt: #2B3640;
+  /* 强色块：深色模式反转为浅底 + 近黑字（配 --on-fill） */
+  --fill-primary:   #97B8D8;
+  --fill-accent:    #DBBC9F;
+  --on-fill:        #10171C;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #2B4157;
+  --tint-accent:    #57412B;
+  --error-tint:     #502828;
+  --error-solid:    #9c3f3f;
+  --border:         rgb(242 246 250 / 0.16);
+  --border-strong:  rgb(242 246 250 / 0.34);
+  --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-md:      0 4px 14px rgb(0 0 0 / 0.55);
+  --scroll-track:   #2B3640;
+  --scroll-thumb:   #97B8D8;
+}
+
+/* ================= 类型2 绿/橙  ·  浅色（空气感） =================
+   两处改动（相对源色板）：
+     1. 绿色降饱和：S 53.1% → 34.7%，色相 118° 与亮度 0.808 保持不变。
+        同一比例套用到整套绿色族（页底/内嵌槽/软色底/滚动条），家族才不脱节。
+     2. 第二色 ↔ 错误色 对调：第二色 #FEC7FF → #FFE5B4，错误色 #FFE5B4 → #FEC7FF。
+        对调后错误色是品红，而奶油色根本不像"出错了"，这一版语义才对。
+   --tint-* 与 --error-tint 的亮度按 §3 规则重解（ink≥4.5 且 vs 页底≥1.13，取最浅）。 */
+:root[data-theme="t2"] {
+  /* 墨色 —— --bg-* 与 --tint-* 上的正文色；本套色板为浅色底，白字不可用 */
+  --ink:            #2D602D;
+  --ink-accent:     #2D602D;
+  --ink-error:      #2D602D;
+  --text-muted:     rgb(45 96 45 / 0.62);
+  --text-disabled:  rgb(72 92 71 / 0.38);
+  /* 背景三层：白面 / 极浅页底 / 中性内嵌槽（配 --ink） */
+  --bg-app:         #F5F8F5;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-alt: #D5DAD5;
+  /* 强色块（配 --on-fill） */
+  --fill-primary:   #BEDFBD;
+  --fill-accent:    #fffab4;
+  --on-fill:        #2D602D;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #DDEEDD;
+  --tint-accent:    #EFE9DD;
+  --error-tint:     #efdee4;
+  --error-solid:    #ad3565;   /* 白字可用 */
+  /* 描边与投影 —— 空气感下层级主要靠它表达，shadow 不做大面积底色 */
+  --border:         rgb(72 92 71 / 0.22);
+  --border-strong:  rgb(72 92 71 / 0.45);
+  --shadow-sm:      0 1px 2px rgb(72 92 71 / 0.12);
+  --shadow-md:      0 4px 12px rgb(72 92 71 / 0.18);
+  --scroll-track:   #BEDFBD;
+  --scroll-thumb:   #F5F8F5;
+}
+
+/* ================= 类型2 绿/橙  ·  深色 ================= */
+:root[data-theme="t2"][data-mode="dark"] {
+  --ink:            #F2F6FA;
+  --ink-accent:     #eae8b8;
+  --ink-error:      #E7B0E8;
+  --text-muted:     rgb(242 246 250 / 0.62);
+  --text-disabled:  rgb(242 246 250 / 0.34);
+  --bg-app:         #141A13;
+  --bg-surface:     #202A20;
+  --bg-surface-alt: #2F3C2F;
+  /* 强色块：深色模式反转为浅底 + 近黑字（配 --on-fill） */
+  --fill-primary:   #A4CCA3;
+  --fill-accent:    #d8d897;
+  --on-fill:        #10171C;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #344F33;
+  --tint-accent:    #57482B;
+  --error-tint:     #50283c;
+  --error-solid:    #af4365;
+  --border:         rgb(242 246 250 / 0.16);
+  --border-strong:  rgb(242 246 250 / 0.34);
+  --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-md:      0 4px 14px rgb(0 0 0 / 0.55);
+  --scroll-track:   #2F3C2F;
+  --scroll-thumb:   #A4CCA3;
+}
+
+/* ================= 类型3 紫/珊瑚  ·  浅色（空气感） =================
+   第二色 ↔ 错误色 对调：第二色 #F0FFC7 → #FFC5B4，错误色 #FFC5B4 → #F0FFC7。
+   副产物：原来那个"几乎等于白、在页底上看不见"的黄绿（vs 页底 1.03）
+   现在只当错误软底用，强调块换成珊瑚色（vs 页底 1.38），可见性问题顺手消失；
+   --fill-accent 因此不再需要 §3.5 的自适应加深，回归源色原值。 */
+:root[data-theme="t3"] {
+  /* 墨色 —— --bg-* 与 --tint-* 上的正文色；本套色板为浅色底，白字不可用 */
+  --ink:            #554F65;
+  --ink-accent:     #554F65;
+  --ink-error:      #554F65;
+  --text-muted:     rgb(85 79 101 / 0.62);
+  --text-disabled:  rgb(128 119 153 / 0.38);
+  /* 背景三层：白面 / 极浅页底 / 中性内嵌槽（配 --ink） */
+  --bg-app:         #F5F4F9;
+  --bg-surface:     #FFFFFF;
+  --bg-surface-alt: #D6D4DB;
+  /* 强色块（配 --on-fill） */
+  --fill-primary:   #D6C7FF;
+  --fill-accent:    #FFC5B4;
+  --on-fill:        #554F65;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #E7E3F2;
+  --tint-accent:    #EAD8D3;
+  --error-tint:     #ead2de;
+  --error-solid:    #be316e;   /* 白字可用 */
+  /* 描边与投影 —— 空气感下层级主要靠它表达，shadow 不做大面积底色 */
+  --border:         rgb(128 119 153 / 0.22);
+  --border-strong:  rgb(128 119 153 / 0.45);
+  --shadow-sm:      0 1px 2px rgb(128 119 153 / 0.12);
+  --shadow-md:      0 4px 12px rgb(128 119 153 / 0.18);
+  --scroll-track:   #D6C7FF;
+  --scroll-thumb:   #F5F4F9;
+}
+
+/* ================= 类型3 紫/珊瑚  ·  深色 ================= */
+:root[data-theme="t3"][data-mode="dark"] {
+  --ink:            #F2F6FA;
+  --ink-accent:     #EAC3B8;
+  --ink-error:      #D9E8B0;
+  --text-muted:     rgb(242 246 250 / 0.62);
+  --text-disabled:  rgb(242 246 250 / 0.34);
+  --bg-app:         #14111C;
+  --bg-surface:     #211D2D;
+  --bg-surface-alt: #312B40;
+  /* 强色块：深色模式反转为浅底 + 近黑字（配 --on-fill） */
+  --fill-primary:   #A897D8;
+  --fill-accent:    #D8A697;
+  --on-fill:        #10171C;
+  /* 软状态色（配 --ink） */
+  --tint-primary:   #372B57;
+  --tint-accent:    #57352B;
+  --error-tint:     #502839;
+  --error-solid:    #762d4f;
+  --border:         rgb(242 246 250 / 0.16);
+  --border-strong:  rgb(242 246 250 / 0.34);
+  --shadow-sm:      0 1px 2px rgb(0 0 0 / 0.45);
+  --shadow-md:      0 4px 14px rgb(0 0 0 / 0.55);
+  --scroll-track:   #312B40;
+  --scroll-thumb:   #A897D8;
+}
+/* ==================== ui/base.css ==================== */
+/* ============================================================================
+   AudioEdition 布局与组件样式
+   依赖 theme.css 提供的令牌；本文件不含任何硬编码颜色。
+   原理图见 布局规格.md，配色契约见 配色方案-落地规格.md
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+}
+
+/* 主题色：新帧从左侧以 15° 斜线扫入，顺时针 = 上端偏右 */
+html[data-vt-dir="sweep"]::view-transition-old(root) { z-index: 1; }
+html[data-vt-dir="sweep"]::view-transition-new(root) {
+  z-index: 2;
+  animation: vt-sweep .4s cubic-bezier(.4, 0, .2, 1) forwards;
+}
+
+/* 多边形 = (左上)(斜线顶)(斜线底)(左下)，斜线顶比底偏右 d = 高×tan15° */
+@keyframes vt-sweep {
+  from {
+    clip-path: polygon(
+      0 0,
+      0 0,
+      calc(1 * var(--vt-d)) 100%,
+      0 100%
+    );
+  }
+  to {
+    clip-path: polygon(
+      0 0,
+      calc(100% + var(--vt-d)) 0,
+      100% 100%,
+      0 100%
+    );
+  }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/*深浅色模式图标*/
+#modeToggle svg { width: 20px; height: 20px; display: block; }
+
+/* 默认（浅色）：只显太阳 */
+#modeToggle .icon-sun  { display: block; }
+#modeToggle .icon-moon { display: none; }
+
+/* 深色：只显月亮 */
+html[data-mode="dark"] #modeToggle .icon-sun  { display: none; }
+html[data-mode="dark"] #modeToggle .icon-moon { display: block; }
+
+/* 变亮（黑→白）：新帧白从圆心扩散 */
+html[data-vt-dir="expand"]::view-transition-old(root) { z-index: 1; }
+html[data-vt-dir="expand"]::view-transition-new(root) {
+  z-index: 2;
+  animation: vt-expand .5s cubic-bezier(.16,1,.3,1) forwards;
+}
+
+/* 变暗（白→黑）：旧帧白收到圆心，露出新帧黑 */
+html[data-vt-dir="contract"]::view-transition-old(root) {
+  z-index: 2;
+  animation: vt-contract .5s cubic-bezier(.16,1,.3,1) forwards;
+}
+html[data-vt-dir="contract"]::view-transition-new(root) { z-index: 1; }
+
+/* 圆心都在左下角（要改中心就把 at 后面换成 50% 50%） */
+@keyframes vt-expand {
+  from { clip-path: circle(0 at 0% 100%); }
+  to   { clip-path: circle(var(--vt-r, 150%) at 0% 100%); }
+}
+@keyframes vt-contract {
+  from { clip-path: circle(var(--vt-r, 150%) at 100% 0%); }
+  to   { clip-path: circle(0 at 100% 0%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-vt-dir] ::view-transition-old(root),
+  html[data-vt-dir] ::view-transition-new(root) { animation: none; }
+}
+
+
+body {
+  display: flex;
+  flex-direction: column;
+  /* 1240 = 1440 设计宽 - 200；用 1280 会让自家断点就触发横向滚动条 */
+  min-width: 1240px;
+  background: var(--bg-app);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: var(--fs-body);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color .15s ease, color .15s ease;
+}
+
+/* 空气感标尺下 bg-app 与 bg-surface 近乎连续（对比度仅 1.07–1.09），
+   因此层级必须靠描边与投影表达 —— 见 配色方案-落地规格.md §5 第 5 条。 */
+
+button, input, select { font: inherit; color: inherit; }
+
+/* [hidden] 必须能压过组件自身的 display —— 否则 .bulkbar{display:flex} 等会把它显示出来 */
+[hidden] { display: none !important; }
+
+:focus-visible {
+  outline: 2px solid var(--border-strong);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* 滚动条。
+   scrollbar-color 是【继承】属性：写在 `*` 上等于给 1401 个元素各加一条声明，
+   每次全树样式重算都要多匹配一条规则、多算一个属性（主题切换时这一项被放大）。
+   写在根上，继承下去即可。
+   ⚠ scrollbar-width 是【不继承】的 —— 写在 html 上只作用于 html 自己，
+     所以它必须逐个列在真正会滚动的容器上。全仓会滚的只有下面这 4 个：
+       .pane__body（队列+日志）· .filelist · .cardedit（卡片编辑器）· .drawer__cards
+     （.chainbar .chain 是第 5 个，但它故意隐藏滚动条，见 header.css，别加进来） */
+html { scrollbar-color: var(--scroll-thumb) var(--scroll-track); }
+
+.pane__body,
+.filelist,
+.cardedit,
+.drawer__cards { scrollbar-width: thin; }
+
+.pane__body::-webkit-scrollbar,
+.filelist::-webkit-scrollbar,
+.cardedit::-webkit-scrollbar,
+.drawer__cards::-webkit-scrollbar { width: 14px; height: 14px; }
+.pane__body::-webkit-scrollbar-track,
+.filelist::-webkit-scrollbar-track,
+.cardedit::-webkit-scrollbar-track,
+.drawer__cards::-webkit-scrollbar-track { background: var(--scroll-track); border-radius: 10px; }
+.pane__body::-webkit-scrollbar-thumb,
+.filelist::-webkit-scrollbar-thumb,
+.cardedit::-webkit-scrollbar-thumb,
+.drawer__cards::-webkit-scrollbar-thumb { background: var(--scroll-thumb); border-radius: 7px; border: 3px solid var(--scroll-track); }
+.pane__body::-webkit-scrollbar-thumb:hover,
+.filelist::-webkit-scrollbar-thumb:hover,
+.cardedit::-webkit-scrollbar-thumb:hover,
+.drawer__cards::-webkit-scrollbar-thumb:hover { background: var(--ink); }
+
+/* ---------------------------------------------------- 主题切换期间静音组件过渡
+   主题切换 = 全树令牌变化，凡是声明了 transition 的元素都会为这个变化起一段动画
+   （实测数百个 Animation 覆盖 background-color / border-*-color / box-shadow /
+   scrollbar-color），每个都在重绘 → 连续掉帧。扫掠/径向动画已经由 view-transition
+   负责，组件自己这一段纯属副作用。标记由 app.js 的 switchTheme() 加/摘。
+
+   下面两条边界必须同时成立，缺任何一个都会把平扫/径向打掉：
+     1. 只写 transition，**不要写 animation**。
+        平扫 vt-sweep 与径向 vt-expand / vt-contract 都是 animation
+        （见本文件上面的 @keyframes），不是 transition —— 天然碰不到。
+     2. 选择器只命中**元素树**。`*` 匹配不到 ::view-transition-old(root) /
+        ::view-transition-new(root)：那是 root 的 view-transition 伪元素，
+        不在元素树里，后代选择器覆盖不到。
+
+   ⚠ 两条禁令（改这条规则前先读）：
+     · 别把它扩写成 `transition: none; animation: none` —— 那会连平扫一起停掉；
+     · 别把平扫/径向从 animation 改写成 transition(clip-path) ——
+       一旦改成 transition，就会被这条规则掐掉。它们**故意**用 animation。 */
+html[data-theme-switch] *,
+html[data-theme-switch] *::before,
+html[data-theme-switch] *::after {
+  transition: none !important;
+}
+/* ==================== ui/common.css ==================== */
+/* ============================== 通用件 ============================== */
+
+.btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 7px 14px;
+  background: var(--bg-surface);
+  /* 必须显式声明 color：否则会从父级继承（如 .bulkbar 的 --on-fill），
+     深色模式下变成近黑字 + 深色底，完全不可读 */
+  color: var(--ink);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background .14s, border-color .14s, box-shadow .14s, transform .06s;
+}
+.btn:hover { background: var(--fill-primary); border-color: var(--border-strong); color: var(--on-fill); }
+.btn:active { transform: translateY(1px); }
+
+/* 强色块上的文字一律用 --on-fill，深色模式下它是近黑色 */
+.btn--primary { background: var(--fill-primary); color: var(--on-fill); border-color: transparent; }
+.btn--primary:hover { background: var(--fill-accent); color: var(--on-fill); }
+.btn--danger { background: var(--error-tint); color: var(--ink); border-color: var(--border-strong); }
+.btn--danger:hover { background: var(--error-solid); color: #fff; }
+/* ghost 按钮底色由父级透出 —— 父级总是 --bg-surface / --bg-surface-alt 系列
+   （面板、工具条），所以文字取 --ink（深色模式下为浅色）。 */
+.btn--ghost { background: transparent; color: var(--ink); border-color: transparent; box-shadow: none; }
+.btn--ghost:hover { background: var(--fill-primary); color: var(--on-fill); }
+.btn--sm { padding: 5px 11px; font-size: 13px; border-radius: var(--radius-inner); }
+.btn--xs { padding: 3px 9px; font-size: 12px; border-radius: var(--radius-inner); }
+.btn--icon { padding: 9px; border-radius: 12px; }
+.btn--icon svg { width: 18px; height: 18px; }
+
+.input {
+  padding: 7px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  color: var(--ink);
+  min-width: 0;
+}
+.input::placeholder { color: var(--text-muted); }
+.input--search { width: 200px; }
+.input--search {
+  flex: 1 1 auto;
+  min-width: 0;
+  width: auto;
+  /* 聚焦时过渡，别让描边硬闪 */
+  transition: border-color .16s ease,
+              box-shadow .16s ease,
+              background .16s ease;
+}
+
+/* 吃掉全局那条 outline，改用 border + 内阴影表达聚焦 */
+.input--search:focus,
+.input--search:focus-visible {
+  outline: none;
+  border-color: var(--fill-primary);
+  background: var(--bg-surface);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--fill-primary) 30%, transparent);
+}
+
+.badge {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 2px 9px;
+  font-size: 12px;
+  border-radius: 999px;
+  background: var(--tint-primary);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.badge--run    { background: var(--tint-accent); }
+.badge--done   { background: var(--tint-primary); }
+.badge--failed { background: var(--error-tint); }
+.badge--idle   { background: var(--bg-surface-alt); }
+
+/* 主题色点必须写死：它要在"别的主题生效时"也显示各主题自己的颜色，
+   所以不能用 var(--fill-primary)。改色板时这三个值要跟着改。
+   做成双色（对角切一半）：第一色 + 第二色，否则第二色在界面里根本看不到 ——
+   它只在"选中文件 / 任务运行中 / 正在试听 / 上传中"这些瞬时状态才出现。 */
+.dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; }
+/* 这三个色点的颜色是**各家色板自己的值**，刻意不写 var(--fill-*)：
+   它们是"切到这套主题会长什么样"的预览，切到 t1 时 t2 的点也该还是绿的。
+   代价是 theme.css 改色后这里要手动跟 —— t2 的第二色就曾经漏跟，
+   预览里还是对调前的 #FFE5B4，而实际 --fill-accent 已经是 #FFFAB4。
+   browser_palette_probe.js 现在会拿色点的渐变色去比对当前令牌，防止再次脱节。 */
+.dot--t1 { background: linear-gradient(135deg, #BDDBF8 0 50%, #F8DABD 50% 100%);
+           box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
+.dot--t2 { background: linear-gradient(135deg, #BEDFBD 0 50%, #FFFAB4 50% 100%);
+           box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
+.dot--t3 { background: linear-gradient(135deg, #D6C7FF 0 50%, #FFC5B4 50% 100%);
+           box-shadow: inset 0 0 0 1px rgba(0,0,0,.18); }
+/* ==================== ui/header.css ==================== */
+/* =============================== Header =============================== */
+
+.header {
+  flex: 0 0 auto;
+  height: var(--header-h);
+  display: flex; align-items: center; gap: 14px;
+  padding: 0 22px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  position: relative; z-index: 20;
+}
+
+.brand { display: flex; align-items: center; gap: 13px; }
+.brand__mark {
+  width: 54px; height: 54px;
+  display: grid; place-items: center;
+  background: var(--fill-primary); color: var(--on-fill);
+  border-radius: var(--radius-card);
+}
+.brand__mark svg { width: 30px; height: 30px; }
+.brand__title { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: .2px; }
+.brand__sub { margin: 1px 0 0; font-size: 12px; color: var(--text-muted); }
+
+.header__spacer { flex: 1; }
+
+/* ---------------- 执行链（常驻顶栏） ---------------- */
+.chainbar {
+  flex: 0 1 auto;
+  min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 12px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+.chainbar__label {
+  flex: 0 0 auto;
+  font-size: 12px; font-weight: 700;
+  color: var(--text-muted);
+  letter-spacing: .3px;
+}
+.chainbar .chain {
+  min-width: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.chainbar .chain::-webkit-scrollbar { display: none; }
+.chainbar .chain__item { white-space: nowrap; }
+.chainbar__acts { flex: 0 0 auto; display: flex; gap: 6px; }
+
+/* ---------------- 执行链模式开关（串行 / 并行） ----------------
+   「串行 / 并行」这两个词本身说明不了差别，真正的差别是"接不接得上"，
+   所以 title 里写清楚了；这里只保证它够窄、不把顶栏撑开。 */
+#chainMode { flex: 0 0 auto; }
+#chainMode .seg { padding: 3px 9px; font-size: 11.5px; }
+
+/* ---------------- 链上的"接不上"提示 ----------------
+   只提示、不阻断：这些组合跑得起来，只是结果可能不是用户以为的那样。
+   放在链的下一行，避免把顶栏高度撑高（顶栏只有 --header-h）。 */
+.chainbar { position: relative; }
+.chain__notes {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 40;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  max-width: min(680px, 70vw);
+  padding: 7px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+}
+.chain__note {
+  font-size: 11.5px;
+  color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 460px;
+}
+
+/* 执行链按钮：链为空或无选中文件时禁用 */
+.btn--run { display: inline-flex; align-items: center; gap: 5px; }
+.btn--run svg { width: 13px; height: 13px; }
+.btn--run:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+  background: var(--bg-surface);
+  color: var(--ink);
+}
+.btn--run:disabled:hover { background: var(--bg-surface); color: var(--ink); }
+.chainbar[data-running="true"] .btn--run { background: var(--fill-accent); color: var(--on-fill); }
+
+/* --- 试听音量（挂在 chainbar 右端）--- */
+.chainbar__vol {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 6px;
+  padding-left: 10px;
+  border-left: 1px solid var(--border);
+}
+.vol__btn {
+  flex: 0 0 auto;
+  width: 24px; height: 24px;
+  display: grid; place-items: center;
+  padding: 0;
+  color: var(--ink);
+  background: transparent; border: 0; border-radius: 7px;
+  cursor: pointer;
+  transition: color .16s, background .16s;
+}
+.vol__btn svg { width: 15px; height: 15px; }
+.vol__btn:hover { background: var(--tint-primary); }
+.vol__btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 1px; }
+/* 静音时用错误色点出来，扫一眼就知道"听不到是因为静音了" */
+.vol__btn.is-muted { color: var(--ink-error); }
+
+/* 已填充部分靠 --vol-pct 画在轨道背景上（原生 range 没法直接给"已填充"上色）。
+   颜色必须用 --ink 而不是 --fill-primary：后者是"浅色色块"令牌（t1 浅色是 #BDDBF8），
+   与 chainbar 底色 --bg-surface-alt(#D4D8DB) 亮度几乎相同，实测对比度只有 1.00 —— 整条轨道看不见。
+   --ink 是色板里保证"在 --bg-* 上可读"的那个颜色，深浅两套都成立。
+   空轨道用 --ink 的 20% 叠色，各主题关系一致。 */
+.vol__range {
+  --vol-pct: 100%;
+  -webkit-appearance: none; appearance: none;
+  flex: 0 0 auto;
+  width: 74px; height: 4px; margin: 0;
+  background: var(--border-strong);           /* 不支持 color-mix 时的退路 */
+  background: linear-gradient(to right,
+    var(--ink) 0 var(--vol-pct),
+    color-mix(in srgb, var(--ink) 20%, transparent) var(--vol-pct) 100%);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.vol__range::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--bg-surface);
+  border: 2px solid var(--ink);
+  cursor: pointer;
+}
+.vol__range::-moz-range-thumb {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--bg-surface);
+  border: 2px solid var(--ink);
+  cursor: pointer;
+}
+.vol__range::-moz-range-track { background: transparent; }
+.vol__range:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+/* 数值读数用 --ink：--text-muted 在这些底色上只有 2.55，小字号读不清 */
+.vol__val {
+  min-width: 26px; text-align: right;
+  font-size: 11px; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.switchgroup {
+  display: inline-flex; gap: 2px; padding: 3px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+.seg {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 5px 12px; font-size: 13px;
+  background: transparent; border: 0; border-radius: 999px;
+  cursor: pointer; color: var(--ink);
+}
+.seg:hover { background: var(--tint-primary); }
+.seg[aria-pressed="true"] { background: var(--fill-primary); color: var(--on-fill); }
+
+.engine {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 12px; font-size: 12px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  color: var(--text-muted);
+}
+.engine__k { font-weight: 600; color: var(--ink); }
+.engine__v { margin-right: 8px; }
+
+/* 空列表提示：明确告诉用户去拖文件，而不是显示任何假数据 */
+.empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 8px; min-height: 320px; padding: 40px 20px;
+  background: var(--bg-surface);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-card);
+  text-align: center;
+}
+.empty svg { width: 44px; height: 44px; color: var(--text-muted); }
+.empty strong { font-size: 15px; }
+.empty span { font-size: 12.5px; color: var(--text-muted); }
+
+/* 侧栏队列用的紧凑版：320px 会把窄栏撑出滚动条 */
+.empty--sm { min-height: 0; padding: 22px 12px; gap: 6px; border-style: solid; }
+.empty--sm svg { width: 28px; height: 28px; }
+.empty--sm strong { font-size: 13px; }
+.empty--sm span { font-size: 11.5px; }
+
+/* ======================= 3D 跟随效果开关 ======================= */
+
+/* 这里只管按钮本身。真正的"关掉跟随"在 app.js 的 bindFollow() 里 ——
+   它决定要不要往元素上写 --nx/--ny。
+
+   为什么不在 CSS 里 `transform: none` 一刀切：
+     · 模态框 .modal__box 的 transform 同时承担入场动画
+       （rotateX(--enter-rx) 从 -72deg 到 0deg），盖掉就连打开动画一起没了；
+       它需要的是"只去掉 --nx/--ny 那两项，保留 --enter-rx"。
+     · --nx/--ny 是 inline style 写的自定义属性，优先级高于任何 CSS 规则，
+       CSS 想覆盖只能上 !important，比在源头控制脏得多。
+   所以开关的消费方统一交给 bindFollow()：关掉时把这两个变量写 0，
+   所有 calc() 自然归零，各处的动画该保留的保留。 */
+
+#fxToggle { position: relative; }
+#fxToggle[aria-pressed="false"] { color: var(--text-muted); }
+
+/* 关闭态：中心一道斜杠 —— 一眼能看出这个动效被关掉了 */
+#fxToggle::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64%;
+  height: 1.6px;
+  border-radius: 2px;
+  background: currentColor;
+  pointer-events: none;
+  transform: translate(-50%, -50%) rotate(-45deg) scaleX(0);
+  transition: transform .18s cubic-bezier(.22, 1, .36, 1);
+}
+#fxToggle[aria-pressed="false"]::after {
+  transform: translate(-50%, -50%) rotate(-45deg) scaleX(1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #fxToggle::after { transition: none; }
+}
+/* ==================== ui/layout.css ==================== */
+/* ================================ Body ================================ */
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+/* --------------------------- 左侧栏 --------------------------- */
+
+.sidebar {
+  flex: 0 0 var(--sidebar-w);
+  display: flex; flex-direction: column;
+  min-height: 0;
+  background: var(--bg-surface);
+  border-right: 1px solid var(--border-strong);
+}
+
+.pane { display: flex; flex-direction: column; min-height: 0; }
+.pane--queue { flex: 0 0 42%; }
+.pane--log { flex: 1; }
+
+.pane__head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 11px 13px;
+  border-bottom: 1px solid var(--border);
+}
+.pane__title { margin: 0; font-size: 13px; font-weight: 700; letter-spacing: .3px; }
+.pane__head .badge { margin-left: auto; }
+
+.pane__body { flex: 1; overflow-y: auto; padding: 10px; min-height: 0; }
+.pane__body--log { padding: 8px 10px; font-size: 12px; }
+
+.splitter {
+  flex: 0 0 9px;
+  display: grid; place-items: center;
+  cursor: row-resize;
+  background: var(--bg-surface);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.splitter span { width: 26px; height: 3px; border-radius: 2px; background: var(--border-strong); }
+.splitter:hover span { background: var(--ink); }
+
+/* 任务项 */
+.task {
+  padding: 8px 10px;
+  margin-bottom: 7px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--fill-primary);
+  border-radius: var(--radius-inner);
+}
+.task:last-child { margin-bottom: 0; }
+.task--failed { background: var(--error-tint); border-left-color: var(--error-solid); }
+.task--running { border-left-color: var(--fill-accent); }
+.task__top { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.task__name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task__meta { margin-top: 4px; font-size: 11px; color: var(--text-muted); }
+.task__err {
+  margin-top: 5px; padding: 5px 7px;
+  font-size: 11px; font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  background: var(--bg-surface); border-radius: 7px;
+  color: var(--ink); word-break: break-all;
+}
+/* 成功任务带产物时的「打开 / 下载」入口 */
+.task__out { display: flex; gap: 6px; margin-top: 7px; }
+.task__out a { text-decoration: none; white-space: nowrap; }
+
+.progress {
+  height: 6px; margin-top: 6px;
+  background: var(--bg-surface);
+  border-radius: 999px; overflow: hidden;
+}
+.progress > i {
+  display: block; height: 100%;
+  background: var(--fill-primary);
+  border-radius: 999px;
+  transition: width .3s ease;
+}
+
+/* 日志行 */
+.log { display: flex; gap: 7px; padding: 2px 0; font-family: ui-monospace, "Cascadia Code", Consolas, monospace; }
+.log__t { color: var(--text-muted); flex: 0 0 auto; }
+.log__m { flex: 1; word-break: break-word; }
+.log--ok   .log__m { color: var(--ink); font-weight: 600; }
+.log--err  .log__m { color: var(--ink); }
+.log--err  { background: var(--error-tint); border-radius: 5px; padding: 2px 5px; }
+
+/* --------------------------- 主工作区 --------------------------- */
+
+.workspace {
+  flex: 1;
+  display: flex; flex-direction: column;
+  gap: 14px;
+  min-width: 0; min-height: 0;
+  padding: 18px 20px 0;
+}
+
+/* 常驻选择条：全选 / 反选 / 总数 */
+.selbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+}
+.selbar__label { font-size: 12.5px; }
+.selbar__spacer { flex: 1; }
+.selbar__count { font-size: 12px; color: var(--text-muted); }
+
+.bulkbar {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 9px 14px;
+  background: var(--fill-primary);
+  /* 必须【显式声明】color：底是浅色 --fill-primary，
+     深色模式下若继承 --ink 会变成浅色字配浅蓝底（仅 1.9:1）。
+     --on-fill 在深色下是近黑 #10171C，达 8.75:1。 */
+  color: var(--on-fill);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
+}
+.bulkbar__acts { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+
+/* 批量栏内的按钮：整条栏是浅色 --fill-primary。
+   普通按钮若沿用默认的 --bg-surface 底（深色模式下是深色），
+   在浅色栏里既突兀、又只能靠深字才读得清；
+   改为统一取"栏内"配色：浅色 --fill-accent 底 + 深色 --on-fill 字。 */
+.bulkbar .btn--sm {
+  background: var(--fill-accent);
+  color: var(--on-fill);
+  border-color: transparent;
+}
+.bulkbar .btn--sm:hover { background: var(--tint-accent); color: var(--on-fill); }
+/* 删除按钮同样走浅底：用 --error-tint 在深色模式下会变成深绿，
+   配 --on-fill 近黑字只有 1.6:1 */
+.bulkbar .btn--sm.btn--danger { background: var(--fill-accent); color: var(--on-fill); }
+.bulkbar .btn--sm.btn--danger:hover { background: var(--error-solid); color: #fff; }
+
+.check { display: inline-flex; align-items: center; cursor: pointer; }
+.check input { position: absolute; opacity: 0; width: 0; height: 0; }
+.check span {
+  width: 17px; height: 17px;
+  display: grid; place-items: center;
+  background: var(--bg-surface);
+  border: 1.5px solid var(--border-strong);
+  border-radius: 5px;
+}
+.check input:checked + span { background: var(--fill-primary); border-color: var(--border-strong); }
+.check input:checked + span::after {
+  content: ""; width: 9px; height: 5px;
+  /* 勾选标记画在 --fill-primary 上，用 --ink 而非 --on-fill
+     （深色模式下 --fill-primary 是浅蓝底，--on-fill 近黑只有 2.99:1） */
+  border-left: 2px solid var(--ink); border-bottom: 2px solid var(--ink);
+  transform: rotate(-45deg) translate(1px, -1px);
+}
+.check input:focus-visible + span { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+
+.filelist {
+  flex: 1;
+  display: flex; flex-direction: column;
+  gap: var(--gap-card);
+  overflow-y: auto;
+  min-height: 0;
+  /* 让出停靠层的空间：收起时只露快照条(74) + 下边距，避免遮住最后一张卡片 */
+  padding-right: 4px;
+  padding-bottom: 92px;
+}
+/* ==================== ui/filecard.css ==================== */
+/* ============================== 文件卡片 ============================== */
+
+.card {
+  /* 固定高度，不依赖内容 —— 否则 canvas{height:100%} 与自适应父级形成循环依赖，
+     浏览器退回 canvas 固有 150px，把卡片撑到 ~390px（见 布局规格.md §3） */
+  flex: 0 0 auto;
+  height: 160px;
+  display: flex; gap: var(--gap-col);
+  padding: 13px 15px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  transition: box-shadow .16s, border-color .16s;
+}
+.card:hover { box-shadow: var(--shadow-md); border-color: var(--border-strong); }
+
+/* 聚焦态：左条 + 加深投影 */
+.card.is-focused { border-color: var(--border-strong); box-shadow: var(--shadow-md); }
+.card.is-focused::before {
+  content: ""; position: absolute; left: 0; top: 14px; bottom: 14px;
+  width: 3px; border-radius: 0 3px 3px 0; background: var(--fill-primary);
+}
+/* 勾选态：底色 */
+.card.is-checked { background: var(--tint-primary); border-color: var(--border-strong); }
+
+.card__pick {
+  position: absolute; left: 15px; top: 15px; z-index: 2;
+}
+.card__body {
+  flex: 1 1 0; display: flex; gap: var(--gap-col);
+  padding-left: 26px; min-width: 0; overflow: hidden;
+}
+
+/* --- 波形区 --- */
+.wave {
+  flex: 1 1 0; min-width: 340px;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 10px 14px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+}
+.wave__canvasWrap { flex: 1; min-height: 62px; position: relative; }
+.wave__canvas { display: block; width: 100%; height: 100%; border-radius: 8px; cursor: crosshair; }
+.wave__legend {
+  position: absolute; left: 6px; top: 4px;
+  font-size: 10px; color: var(--text-muted); pointer-events: none;
+}
+.wave__play {
+  position: absolute; top: 0; bottom: 0; width: 2px;
+  background: var(--ink); pointer-events: none;
+}
+.wave__play::before {
+  content: ""; position: absolute; top: -2px; left: -3px;
+  border: 4px solid transparent; border-top-color: var(--ink);
+}
+
+/* --- 试听传输控件（在 .wave__meta 行首）--- */
+.transport {
+  display: flex; align-items: center; gap: 8px;
+  padding-right: 14px;
+  border-right: 1px solid var(--border);
+}
+.transport__btn {
+  flex: 0 0 auto;
+  width: 30px; height: 30px;
+  display: grid; place-items: center;
+  padding: 0;
+  color: var(--on-fill);
+  background: var(--fill-primary);
+  border: 1px solid transparent;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background .16s, color .16s;
+}
+.transport__btn svg { width: 14px; height: 14px; }
+.transport__btn:hover { background: var(--fill-accent); }
+.transport__btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.transport__time {
+  font-size: 11.5px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+/* 正在播放的卡片：左侧高亮条，方便在长列表里找回它 */
+.card.is-playing { box-shadow: inset 3px 0 0 var(--fill-primary); }
+.card.is-playing .transport__btn { background: var(--fill-accent); }
+
+.wave__meta {
+  display: flex; align-items: center; gap: 18px; flex-wrap: wrap;
+  padding: 5px 10px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  font-size: 12.5px;
+}
+.kv { display: flex; flex-direction: column; line-height: 1.25; }
+.kv__k { font-size: 10px; color: var(--text-muted); }
+.kv__v { font-weight: 600; }
+
+/* --- 元数据卡 --- */
+.metacard {
+  /* 三列宽度必须锁定：flex-basis 单独设不够，默认 min-width:auto 会让
+     长标题（如 Clair de lune）顶开这一列并挤压波形区 */
+  flex: 0 0 288px; width: 288px; min-width: 288px; max-width: 288px;
+  display: flex; gap: 12px;
+  padding: 11px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  position: relative;
+}
+.cover {
+  position: relative;
+  flex: 0 0 92px; height: 92px;
+  display: grid; place-items: center;
+  background: var(--fill-primary); color: var(--on-fill);
+  border-radius: var(--radius-cover);
+  overflow: hidden;
+  cursor: pointer;
+}
+.cover svg { width: 30px; height: 30px; opacity: .55; }
+
+/* 真封面图：铺满整格，禁用拖拽，避免拽出浏览器默认的图片拖影 */
+.cover__img {
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  -webkit-user-drag: none; user-select: none;
+}
+/* 有图时把占位图标藏掉；图片 404 时 onerror 会把 cover--has 摘掉，占位图标自动回来 */
+.cover--has .cover__ph { display: none; }
+
+/* 悬停浮层：导入 / 移除 */
+.cover__ovl {
+  position: absolute; inset: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 4px;
+  background: color-mix(in srgb, var(--bg-surface) 78%, transparent);
+  backdrop-filter: blur(2px);
+  opacity: 0; pointer-events: none;
+  transition: opacity .16s ease;
+}
+.cover:hover .cover__ovl,
+.cover:focus-within .cover__ovl { opacity: 1; pointer-events: auto; }
+.cover__act {
+  padding: 2px 10px;
+  font: inherit; font-size: 11.5px;
+  color: var(--ink);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  cursor: pointer;
+}
+.cover__act:hover { background: var(--tint-primary); }
+/* 令牌名是 --ink-error（文字色）/ --error-tint（底），别写成 --err-ink */
+.cover__act--danger { color: var(--ink-error); }
+.cover__act--danger:hover { background: var(--error-tint); }
+
+.metabox {
+  flex: 1;
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 9px 11px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  min-width: 0;
+  cursor: pointer;
+  transition: border-color .14s, background .14s;
+}
+.metabox:hover { background: var(--tint-primary); border-color: var(--border-strong); }
+.metabox:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+.metabox__row { display: flex; gap: 7px; font-size: 12.5px; min-width: 0; }
+.metabox__k { flex: 0 0 62px; color: var(--text-muted); }
+.metabox__v { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* --- 状态条 --- */
+.statuscol {
+  flex: 0 0 68px; width: 68px; min-width: 68px; max-width: 68px;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  padding: 10px 6px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+}
+.statuscol .badge { font-size: 11px; padding: 2px 8px; }
+.statuscol__prog {
+  width: 100%; height: 5px; margin: 0;
+  background: var(--bg-surface); border-radius: 999px; overflow: hidden;
+}
+.statuscol__prog > i { display: block; height: 100%; background: var(--fill-accent); }
+.statuscol__info { font-size: 10px; color: var(--text-muted); text-align: center; line-height: 1.35; }
+.statuscol__act {
+  margin-top: auto;
+  padding: 3px 9px; font-size: 11px;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-inner); cursor: pointer;
+}
+.statuscol__act:hover { background: var(--fill-primary); color: var(--on-fill); }
+/* ==================== ui/drawer.css ==================== */
+/* ============================== 抽屉 ==============================
+   停靠在浏览器窗口下边缘，三档：
+
+     closed  只露快照条；盒底贴窗口下边缘；面板整体在窗口边缘之下
+     mid     面板 56vh；盒底离边 EDGE，四角圆角（悬浮）
+     full    盒顶贴窗口顶端，面板撑满到底（上下都贴边）
+
+   盒子的 (top, height) 由 JS 写成 --drawer-top / --drawer-box；
+   面板不设固定高，用 flex 占满盒内剩余高度 ——
+   这样搜索栏永远贴着盒底，不会被挤出视口（曾经踩过）。 */
+
+.dock {
+  /* 仅作为停靠层的容器；抽屉自身相对【视口】绝对定位，
+     这样 top 的参照就是窗口顶端，不会随容器尺寸变化而漂移。 */
+  position: static;
+  z-index: 55;                      /* 高于工作区内容，低于顶栏(60) */
+}
+/* 遮罩 */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 54;
+
+  background: transparent;
+  opacity: 0;
+  pointer-events: none;
+  /* 原来是无属性名的简写（`transition: .34s cubic-bezier(...)`），
+     等价于 transition-property: all —— 连 scrollbar-color 这类根本不该动的属性
+     都会被过渡（trace 里确实看到了 scrollbar-color 的 Animation）。
+     按本文件 186 行那条注释的意图，显式列出真正要过渡的三项。 */
+  transition: background-color .16s ease,
+              opacity .16s ease,
+              backdrop-filter .16s ease;
+}
+
+/* 可点击：除 closed 外所有档（中间档也能点，但此时还没模糊） */
+.drawer:not([data-stop="closed"]) ~ .drawer-backdrop {
+  backdrop-filter: blur(1px);
+  -webkit-backdrop-filter: blur(1px);
+  opacity: 1;  
+}
+
+/* 模糊：只在 full */
+.drawer[data-stop="full"] ~ .drawer-backdrop {
+  pointer-events: auto;
+  background: rgba(0,0,0,0.1);
+  backdrop-filter: blur(6px) saturate(120%);
+  -webkit-backdrop-filter: blur(6px) saturate(120%);
+}
+.drawer {
+  position: fixed;                   /* 参照视口 */
+  /* 顶部位置与盒高都由 JS 按档写；面板占满剩余高度，
+     所以搜索栏永远贴在盒底、不会被挤出视口。 */
+  top: var(--drawer-top, 854px);
+  height: var(--drawer-box, 73px);
+  /* 左边以 --drawer-left 为准（由 JS 按左侧栏【实际渲染宽度】写入），
+     因为 --sidebar-w 声明 234px，但侧栏实际渲染 263px（含内容与边框），
+     用 234 推算会让抽屉压到侧栏 29px 下面。 */
+  left: var(--drawer-left, 248px);
+  right: 14px;
+  z-index: 55;
+  display: flex; flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-bottom: 0;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+  --drawer-top: 854px;               /* 盒顶（JS 写） */
+  --drawer-box: 73px;                /* 盒高（JS 写） */
+  transition: top .34s cubic-bezier(.16,1,.3,1),
+              height .34s cubic-bezier(.16,1,.3,1),
+              border-radius .2s linear;
+}
+/* 拖拽中关掉过渡，跟手 */
+.drawer[data-dragging="true"] { transition: none; }
+/* 贴边档圆角处理：
+   closed 只有快照条露出，露出的上沿要圆角、被裁的下沿不圆；
+   full 盒子撑满整个窗口高度，四角都贴边 → 全直角。 */
+.drawer[data-stop="closed"] { border-radius: var(--radius-card) var(--radius-card) 0 0; }
+.drawer[data-stop="full"]  { border-radius: 0; }
+/* 拖拽中关掉过渡，跟手
+.drawer[data-dragging="true"] { transition: none; }*/
+
+/* 面板：占满盒内剩余高度（盒高 − 快照条），所以搜索栏永远贴着盒底 */
+.drawer__panel {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 快照条：盒子的【第一子元素】，紧随其后是面板。
+   收起时它恰好停在窗口下边缘上方。 */
+.drawer__bar {
+  flex: 0 0 auto;
+  position: relative;
+  padding: 0 14px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer__handle {
+  display: block; width: 100%; height: var(--drawer-handle);
+  padding: 0; background: transparent; border: 0;
+  cursor: grab; touch-action: none;
+}
+.drawer__handle:active { cursor: grabbing; }
+.drawer__grip {
+  display: block; width: 34px; height: 4px; margin: 4px auto 0;
+  background: var(--border-strong); border-radius: 3px;
+  transition: background .14s, width .14s;
+}
+.drawer__handle:hover .drawer__grip { background: var(--ink); width: 46px; }
+.drawer[data-open="true"] .drawer__grip { background: var(--ink); }
+
+.snaps { display: flex; gap: 22px; align-items: stretch; }
+.snap {
+  flex: 1 1 0; min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  height: 50px; padding: 0 14px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  cursor: pointer; text-align: left;
+  transition: background .14s, border-color .14s;
+  position: relative;
+  isolation: isolate;
+}
+.snap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity .28s ease;
+  background-repeat: repeat;
+  background-size: var(--spot-cell) var(--spot-cell);
+  background-position: 0 0;
+}
+
+.snap:hover::before {
+  opacity: 1;
+}
+
+@supports (mask-image: none) or (-webkit-mask-image: none) {
+  .snap::before {
+    -webkit-mask-image: radial-gradient(circle at var(--mx, 50%) var(--my, 50%),
+        rgb(0 0 0 / var(--spot-a1)) 0%,
+        rgb(0 0 0 / var(--spot-a2)) calc(var(--spot-reach) * 0.62),
+        rgb(0 0 0 / var(--spot-a3)) var(--spot-reach));
+    mask-image: radial-gradient(circle at var(--mx, 50%) var(--my, 50%),
+        rgb(0 0 0 / var(--spot-a1)) 0%,
+        rgb(0 0 0 / var(--spot-a2)) calc(var(--spot-reach) * 0.62),
+        rgb(0 0 0 / var(--spot-a3)) var(--spot-reach));
+  }
+  .snap::before {
+    --spot-reach: var(--spot-reach-1);
+    background-image: radial-gradient(circle closest-side,
+      color-mix(in srgb, var(--spot-mix-alt) var(--spot-alt-a), transparent) 0 var(--spot-dot-1),
+      transparent calc(var(--spot-dot-1) + 1%));
+  }
+}
+
+.snap > .snap__ico,
+.snap > .snap__txt { position: relative; z-index: 1; }
+
+@media (hover: none) {
+  .snap::before { display: none; }
+}
+/* 整卡 3D：幅度约为 fcard 的 1/3 */
+.snap:not(.snap--add) {
+  transform:
+    translate(
+      calc(var(--nx, 0) * 2px),
+      calc(var(--ny, 0) * 2px)
+    );
+  transform-origin: center center;
+  transition:
+    transform .18s cubic-bezier(.22, .61, .36, 1),
+    background .14s,
+    border-color .14s,
+    box-shadow .14s;
+}
+.snap:hover { background: var(--fill-primary); border-color: var(--border-strong); color: var(--on-fill); }
+.snap__ico {
+  flex: 0 0 auto; display: grid; place-items: center;
+  width: 26px; height: 26px;
+  /* 第二颜色的固定落点：快照条是抽屉收起时【唯一】可见的东西，
+     在这里用 --fill-accent 才能让"第二色"在默认界面上看得见
+     （它原本只在选中文件/任务运行/试听这些瞬时状态出现） */
+  background: var(--fill-accent); color: var(--on-fill);
+  border-radius: 50%;
+}
+.snap__ico svg { width: 15px; height: 15px; }
+.snap__txt { min-width: 0; }
+.snap__name { font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.snap__hint { font-size: 10px; color: var(--text-muted); }
+.snap:hover .snap__hint { color: var(--on-fill); opacity: .8; }
+/* hover 时抬一点，别太强 */
+.snap:not(.snap--add):hover {
+  box-shadow:
+    0 4px 12px color-mix(in srgb, var(--ink) 14%, transparent),
+    var(--shadow-sm);
+  z-index: 2;
+}
+/* 图标轻微 3D 视差 + hover 阴影 */
+.snap:not(.snap--add) .snap__ico {
+  transform:
+    translate(
+      calc(var(--nx, 0) * 2px),
+      calc(var(--ny, 0) * 2px)
+    );
+  transition: transform .14s ease-out, box-shadow .22s ease;
+}
+.snap:not(.snap--add):hover .snap__ico {
+  box-shadow:1px 1px 2px  color-mix(in srgb, var(--fill-primary) 30%,rgba(0,0,0,0.3) );
+  border: 4px solid rgba(255,255,255,0.1);
+}
+.snap:hover .snap__ico{
+  background: linear-gradient(.35turn, #fff4, #fff5);
+  /* 补上原来漏掉的模糊：这条 transition 一直都列着 backdrop-filter，
+     但从来没真的设过它（空转）。取值与 .fcard__ico 对齐，
+     这样卡片和快照的图标在 hover 时是同一档玻璃质感。 */
+  backdrop-filter: blur(2px) saturate(1.2);
+  -webkit-backdrop-filter: blur(2px) saturate(1.2);
+  transition: background-color .14s, backdrop-filter .14s, -webkit-backdrop-filter .14s;
+}
+/* 同 cardlib.css：3D 关掉时不给图标叠毛玻璃。
+   上面那条现在**真的**设了 blur，所以这条不再空转 —— 它把关掉 3D 之后
+   图标 hover 的逐帧重新模糊一并去掉。 */
+html[data-fx="off"] .snap:hover .snap__ico {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+/* 文字极轻跟随（一层就够，别分层） */
+.snap:not(.snap--add) .snap__txt {
+  transform: translate3d(
+    calc(var(--nx, 0) * 1.2px),
+    calc(var(--ny, 0) * 1.2px),
+    0
+  );
+  transition: transform .14s ease-out;
+}
+
+/* 快照的 will-change 同样只在 hover 期间给：常驻 = 每个快照永久占一层合成层，
+   而跟随动画只在指针停在上面时发生（同 cardlib.css 的说明）。 */
+.snap:hover,
+.snap:hover .snap__ico,
+.snap:hover .snap__txt {
+  will-change: transform;
+}
+
+/* 点击反馈：比 fcard 更轻 */
+.snap:not(.snap--add):active {
+  scale: .97;
+  transition: scale .1s ease-out;
+}
+/* 松手：快速弹回 */
+.snap:not(.snap--add){
+  transition:
+    transform .13s cubic-bezier(.22, .61, .36, 1),
+    scale     .13s cubic-bezier(.22, .61, .36, 1),
+    background .1s, border-color .1s, box-shadow .1s;
+}
+
+/* 拖拽中的那一格不参与跟随（避免和 drop 反馈打架） */
+.snap.snap--drop {
+  transform: none !important;
+}
+
+/* 触屏关闭 */
+@media (hover: none) {
+  .snap:not(.snap--add) {
+    transform: none !important;
+  }
+  .snap .snap__ico,
+  .snap .snap__txt {
+    transform: none !important;
+  }
+}
+/* --- 快照拖拽：卡片拖进来替换 / 快照互拖换位 --- */
+.snap[draggable="true"] { cursor: grab; }
+.snap[draggable="true"]:active { cursor: grabbing; }
+/* 正在被拖动的那一格淡下去，落点更清楚 */
+.snap--drop {
+  border-color: var(--fill-primary);
+  border-style: dashed;
+  background: var(--tint-primary);
+}
+/* 末尾的追加位：比普通格窄，弱化存在感，需要时再拖过去 */
+.snap--add {
+  flex: 0 0 auto; width: 132px;
+  border-style: dashed;
+  color: var(--text-muted);
+}
+.snap--add .snap__ico { opacity: .5; }
+.snap--add .snap__name { font-weight: 500; }
+.snap--add:hover { background: var(--tint-primary); color: var(--ink); }
+/* ============ 快照条：已加入执行链 ============ */
+
+.snap::after {
+  content: "✓";
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  translate: 0 -50%;
+  width: 14px;
+  height: 14px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--fill-primary);
+  color: var(--on-fill);
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: var(--shadow-sm);
+  pointer-events: none;
+  z-index: 3;
+
+  /* 默认隐藏 */
+  opacity: 0;
+  scale: .4;
+
+  transition:
+    opacity .22s ease,
+    scale .26s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+.snap.is-added::after {
+  opacity: 1;
+  scale: 1;
+}
+
+/* hover 变主色底时，让对勾换成 --on-fill 底，反差更清楚 */
+.snap.is-added:hover::after {
+  background: var(--on-fill);
+  color: var(--fill-primary);
+}
+
+/* 加了对勾要给右侧留位置，避免挡住文字 */
+.snap.is-added { padding-right: 30px; }
+
+/* 触屏/减弱动效 */
+@media (prefers-reduced-motion: reduce) {
+  .snap::after { transition: none; }
+}
+
+.drawer__head {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 16px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.drawer__title { margin: 0; font-size: 15px; }
+/* 标题本身是「功能卡片 ⇄ 预设链路」的切换按钮（方案 §3.8.2 四）。
+   看起来仍像标题（去掉按钮的底色/边框），但可点、有焦点圈、有箭头提示可切。 */
+.drawer__title--btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; margin-left: -8px;      /* 让文字左边缘与原来的 h2 对齐 */
+  border: 0; border-radius: 8px;
+  background: transparent; color: inherit;
+  font: inherit; font-size: 15px; font-weight: 600;
+  cursor: pointer;
+  transition: background .16s ease, color .16s ease;
+}
+.drawer__title--btn:hover { background: var(--bg-surface-alt); }
+.drawer__title--btn:focus-visible {
+  outline: 2px solid var(--border-strong); outline-offset: 2px;
+}
+/* 向下的小箭头：提示"这个标题能展开成另一件事" */
+.drawer__title-arrow {
+  width: 0; height: 0;
+  border-left: 4.5px solid transparent;
+  border-right: 4.5px solid transparent;
+  border-top: 5px solid currentColor;
+  opacity: .5;
+  transition: transform .18s ease, opacity .16s ease;
+}
+.drawer__title--btn:hover .drawer__title-arrow { opacity: .9; }
+.drawer__title--btn[aria-pressed="true"] .drawer__title-arrow {
+  transform: rotate(-90deg);
+}
+.drawer__scope { font-size: 12px; color: var(--text-muted); }
+.drawer__head .btn { margin-left: auto; }
+
+/* 可滚动视口：窗口高度固定，内容在此内部滚动 */
+.drawer__viewport {
+  flex: 1 1 auto;
+  display: flex; flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 卡片区：按分类分段，每段一个大标题 */
+.drawer__cards {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 4px 16px 14px;
+}
+
+.cardsec + .cardsec { margin-top: 18px; }
+.cardsec__title {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%;
+  margin: 0 0 10px;
+  padding: 8px 0 7px;
+  font: inherit;
+  font-size: 13px; font-weight: 700; letter-spacing: .3px;
+  color: var(--ink);
+  background: var(--bg-surface);
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+  position: sticky; top: 0; z-index: 1;
+}
+.cardsec__title::after {
+  content: ""; flex: 1; height: 1px; background: var(--border);
+}
+
+/* 箭头：展开↓  收起→ */
+.cardsec__arrow {
+  width: 12px; height: 12px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: transform .2s ease;
+}
+.cardsec__arrow::before {
+  content: "";
+  width: 5px; height: 5px;
+  border-right: 1.6px solid currentColor;
+  border-bottom: 1.6px solid currentColor;
+  transform: rotate(45deg) translate(-1px, -1px);   /* ↓ */
+}
+.cardsec[data-collapsed="true"] .cardsec__arrow::before {
+  transform: rotate(-45deg);                        /* → */
+}
+.cardsec__wrap {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows .28s cubic-bezier(.4, 0, .2, 1);
+}
+.cardsec[data-collapsed="true"] .cardsec__wrap {
+  grid-template-rows: 0fr;
+}
+.cardsec__count {
+  font-size: 11px; font-weight: 500; color: var(--text-muted);
+  padding: 1px 7px; border-radius: 999px;
+  background: var(--bg-surface-alt); border: 1px solid var(--border);
+}
+.cardsec__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 12px;
+  min-height: 0;
+  overflow: hidden;                       /* 基础值 = 裁剪，折叠动画必须靠它 */
+}
+
+/* 展开后放开裁剪，让 3D 位移和阴影完整露出；
+   但延迟到折叠动画播完（.28s）再切，否则展开瞬间内容会整块冒出来 */
+.cardsec[data-collapsed="false"] .cardsec__grid {
+  overflow: visible;
+  transition: overflow 0s linear .28s;
+  transition-behavior: allow-discrete;
+}
+
+.preset__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(calc(2 * 190px + 12px), 1fr));
+  gap: 12px;                              /* 与 .cardsec__grid 同一个沟槽 */
+  min-height: 0;
+}
+.preset__empty {
+  padding: 26px 4px;
+  font-size: 13px; line-height: 1.9; color: var(--text-muted);
+}
+.preset__empty code {
+  padding: 1px 6px; border-radius: 6px;
+  background: var(--bg-surface-alt); border: 1px solid var(--border);
+  font-size: 12px;
+}
+
+
+/* 未知卡片的步骤：链上那一步也要能一眼看出来（§9.1.1 二） */
+.chain__step--unknown { border-color: var(--error-solid) !important; }
+
+/* ---------------- 预设的图标选择器（§3.8.2 三） ----------------
+ * ⚠ **不要在这里写裸 `.iconpick` / `.iconpick__btn`**：
+ *   `.iconpick__btn` 是卡片编辑器那套（`editor.css`，带 3D 倾斜与命中区补偿），
+ *   预设这边以前自己造了 `.iconpick__item` + 一条裸 `.iconpick`（加 padding/边框/底色），
+ *   于是同一个类名在 `editor.css`（gap 6px、无内边距）与这里被定义两次 ——
+ *   后加载的那份赢，**卡片编辑器的图标格会莫名多出一圈底框**。
+ *   现在两边共用 `.iconpick__btn`，这里只留"预设特有"的那点差异。 */
+.iconpick--preset {
+  padding: 8px; border-radius: 10px;
+  background: var(--bg-surface-alt); border: 1px solid var(--border);
+  /* ⚠ 三件"不许超框"的事，别删：
+     ① `border-box`：模态里这一列只有 ~209px，`content-box` 会让整块比轨道宽 2px
+        （实测 `scrollWidth 207 > clientWidth 205`）。
+     ② `min-width: 0`：这一列是 grid/flex 子项，默认 `min-width: auto` 会被
+        内容（10 个 34px 格子）顶宽，于是整块**顶出模态框**。
+     ③ 固定宽度的小格子用**网格**排，不用 flex-wrap：flex 的 34+6 柱子刚好跨过
+        列宽边界，每行个数会随宽度抖动（4 或 5 个来回跳），
+        `auto-fill` 是均分，行数变了也不会半个格子挂到下一行。 */
+  box-sizing: border-box;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 34px);
+  /* ⚠ 行高也要钉死：只写 `grid-template-columns` 时，若这一列的高度被
+     父级 flex 压住（`.field` 是 `flex-direction: column`），网格会把
+     **每一行一起压缩** —— 格子还是 34 宽，高度只剩 13px，图标被切掉一半。
+     采过这个坑：`grid-template-columns` 算对了，行高却是压缩后的。 */
+  grid-auto-rows: 34px;
+  gap: 6px;
+  justify-content: start;
+  /* ⚠ `.field` 是 `flex-direction: column` → 这块是 flex 子项，**默认允许被压缩**
+     （`flex-shrink: 1`）。10 个格子要 3 行 114px，被压到 40px 时网格会把每一行
+     一起缩（格子 34×11），图标被切掉一半。`flex: none` + `min-height` 两件都要：
+     前者管"不被压"，后者管"高到够放两行"（一行时也不塌）。 */
+  flex: none;
+  min-height: calc(2 * 34px + 6px + 2 * 8px + 2px);   /* 2 行格子 + 行距 + 内边距 + 边框 */
+  /* 不写 `overflow-x: auto`：这一块本来就不该横滚（格子是固定的 34px），
+     真被撑宽了要**当场看出来**，而不是被一个滚动条藏住。 */
+  max-width: 100%;
+}
+/* 与卡片编辑器同宽同高（16px）。不写的话 `.iconpick__btn svg` 那条命中不了
+   （这里的选择器更靠后、也更具体），图标会撑成 24px 的默认尺寸。 */
+.iconpick--preset .iconpick__btn svg { width: 16px; height: 16px; }
+/* 网格里的格子：`flex: 0 0 34px`（editor.css 那条）在网格里是无效的，靠这条钉住尺寸 */
+.iconpick--preset .iconpick__btn { width: 34px; height: 34px; min-width: 0; }
+
+/* 「自动」态：那几个图标是**按链推导**出来的，不是用户手选的 ——
+   所以用**虚线边框**而不是实心底色（`editor.css` 的 `[aria-checked="true"]` 给的是
+   `--fill-primary` 实心块）。必须带 `--preset` 前缀把特异性抬到 (0,2,0)，
+   否则压不过 editor.css 那条 (0,2,0) —— 同分看文件顺序，而 editor.css 在后面。
+   「一个图标都没有」是另一种情况（链上全是未知卡片），那时这排格子真的全不勾。 */
+.iconpick--preset[data-auto="1"] .iconpick__btn[aria-checked="true"] {
+  background: transparent;
+  border-style: dashed;
+  border-color: var(--border-strong);
+  color: var(--ink);
+}
+/* 自动态下 hover：**别碰 border-style**（破了虚线就看不出是自动还是手选了）。
+   玻璃渐变照抄 editor.css 那条 —— 3D 手感是同一个组件的一部分，不该因为"自动"就没。 */
+.iconpick--preset[data-auto="1"] .iconpick__btn:hover {
+  background: linear-gradient(.35turn, #fff4, #fff5);
+}
+/* 底下那两个动作按钮（恢复自动 / 全部图标 ⇄ 只用链上的图标）。
+   ⚠ 必须 `flex-wrap: wrap`：右边那个按钮的文字会在**两倍长**之间来回切
+   （`全部图标` ⇄ `只用链上的图标`），一行放不下时它原来会**顶出模态框**
+   （用户报的"#presetIconsAll 超出模态框"）。允许换行 = 放不下就掉到第二行，
+   而不是横向溢出去。`min-width: 0` 同样是为了不被按钮文字撑宽这一列。 */
+.iconpick__acts {
+  display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px;
+  min-width: 0; max-width: 100%;
+}
+.iconpick__acts > .btn { min-width: 0; max-width: 100%; }
+
+.preset__meta {
+  margin: 2px 0 0; font-size: 12px; line-height: 1.7; color: var(--text-muted);
+}
+.preset__list {
+  margin-top: 4px; padding: 9px 11px; border-radius: 10px;
+  background: var(--bg-surface-alt); border: 1px solid var(--border);
+  font-size: 12px; line-height: 1.8;
+}
+.preset__list li { margin-left: 16px; }
+
+/* ---------------- 编辑执行链（§9.1.2 二 B） ---------------- */
+.chainedit {
+  display: flex; flex-direction: column; gap: 8px;
+  max-height: 52vh; overflow-y: auto; padding: 2px;
+}
+.cedit {
+  display: flex; align-items: center; gap: 10px;
+  padding: 9px 11px; border-radius: 11px;
+  border: 1px solid var(--border); background: var(--bg-surface);
+}
+.cedit--unknown { border-left: 3px solid var(--error-solid); }
+.cedit__idx {
+  flex: 0 0 22px; font-size: 11px; color: var(--text-muted); text-align: right;
+}
+.cedit__ico {
+  flex: 0 0 28px; width: 28px; height: 28px;
+  display: grid; place-items: center; border-radius: 8px;
+  background: var(--bg-surface-alt); border: 1px solid var(--border);
+  font-size: 10px; font-weight: 600; color: var(--text-muted);
+}
+.cedit__body { flex: 1 1 auto; min-width: 0; }
+.cedit__name { font-size: 13px; font-weight: 600; }
+.cedit__note { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
+.cedit__acts { display: flex; gap: 4px; flex: 0 0 auto; }
+/* ==================== ui/cardlib.css ==================== */
+/* ============ 卡片基础 ============ */
+.fcard {
+  display: flex; flex-direction: column; gap: 7px;
+  padding: 12px 13px;
+  border: 1px solid transparent;        /* 描边让位给 border-box 背景层 */
+  border-radius: var(--radius-card);
+  cursor: pointer; text-align: left;
+
+  /* 两层：内层填充(padding-box) + 外层描边(border-box) */
+  background:
+    linear-gradient(var(--bg-surface-alt), var(--bg-surface-alt)) padding-box,
+    linear-gradient(var(--border), var(--border))                 border-box;
+
+  transition: background .14s, box-shadow .14s;   /* border-color 不再需要 */
+}
+
+.fcard:hover {
+  background:
+    linear-gradient(var(--tint-primary), var(--tint-primary)) padding-box,
+    radial-gradient(140% 140% at 18% 0%,          /* ← 暗角：光源左上 */
+      var(--border-strong) 0%,
+      color-mix(in srgb, var(--border-strong) 35%, transparent) 40%,
+      rgba(0, 0, 0, .55) 100%) border-box;
+  box-shadow: var(--shadow-sm);
+}
+.fcard__top { display: flex; align-items: center; gap: 9px; }
+.fcard__ico {
+  flex: 0 0 auto; width: 30px; height: 30px;
+  display: grid; place-items: center;
+  background: var(--fill-primary); color: var(--on-fill);
+  border-radius: 9px;
+}
+.fcard__ico svg { width: 17px; height: 17px; }
+.fcard__name { font-size: 13px; font-weight: 600; }
+.fcard__desc { font-size: 11.5px; color: var(--text-muted); line-height: 1.45; }
+.fcard__foot { display: flex; align-items: center; gap: 6px; margin-top: auto; }
+.fcard__tier { font-size: 10px; padding: 1px 7px; border-radius: 999px; background: var(--bg-surface); border: 1px solid var(--border); }
+.fcard--new { border-style: dashed; justify-content: center; align-items: center; text-align: center; color: var(--text-muted); }
+.fcard--new:hover { color: var(--ink); }
+
+
+.pcard {
+  position: relative;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 12px 13px;
+  text-align: left;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--bg-app);
+  color: inherit; font: inherit;
+  cursor: pointer;
+  box-shadow: 0 1px 2px color-mix(in srgb, var(--ink) 40%, transparent);
+}
+.pcard:hover {
+  border-color: var(--border-strong);
+  background: color-mix(in srgb, var(--tint-primary) , var(--bg-app));
+}
+
+/* 半调（AM 网点）的承载层：4 层里的 3 层靠它的两个伪元素撑起来。
+   结构和 `.fcard__dots` 一模一样，样式在 cardlib.css（两族卡片共用一份）。
+   **必须是卡片的直接子元素**（选择器写的是 `>`），且内容要压在它上面。 */
+.pcard__dots {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+  /* ⚠ 必须自己带 opacity 过渡：cardlib.css 里那条 `.pcard > .pcard__dots` 的
+     特异性(0,2,0)高于 `.pcard`(0,1,0)，会把卡片本体上的 transition **整条顶掉** ——
+     网点会"啪"地出现而不是淡入。这条也是 (0,1,0)，但它在文件后面，赢。 */
+  transition: opacity .28s ease;
+}
+.pcard:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+
+/* 图标平铺：每个格子沿用功能卡片那套玻璃方块，2×2 的卡里放大到 34px。
+   ⚠ 格子里是**图形**（`svg(ico)`），不是 `FLAC`/`TAG` 这种短名文字 ——
+   同一个 `ico` 键在功能卡片上是图形，在预设卡片上也得是图形，
+   否则同一个抽屉里出现两套表达（§10.6.3）。 */
+.pcard__icons { display: flex; align-items: center; gap: 7px; flex-wrap: nowrap; }
+.pcard__ico {
+  width: 34px; height: 34px; flex: 0 0 34px;
+  display: grid; place-items: center;
+  border-radius: 10px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+/* 18px 是 34px 方块的通用搭档尺寸：再大线会顶到圆角，再小细节糊成一团 */
+.pcard__ico svg { width: 18px; height: 18px; display: block; }
+/* 省略号**必须与图标同宽同高**：6 格和 5 格的排布才不会跳（§3.8.2 三） */
+.pcard__ico--more { font-size: 15px; line-height: 1; font-weight: 600; }
+
+.pcard__name { font-size: 14px; font-weight: 600; }
+.pcard__desc {
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.pcard__foot { display: flex; align-items: center; gap: 6px; margin-top: auto; }
+
+/* 未知卡片（§9.1.2 一）：**高亮不是禁用** —— 快照齐全时它照样能跑 */
+.pcard.is-unknown { border-left: 3px solid var(--error-solid); }
+.pcard__warn {
+  position: absolute; top: 10px; right: 10px;
+  /* 网点层有一层是 `.pcard::after`（画在**所有**子节点之上），所以要显式抬到它上面，
+     否则 hover 时「N 未知」会被半调点压住。对勾（`.fcard::before`）用的是同一个值。 */
+  z-index: 3;
+  font-size: 10px; font-weight: 600;
+  padding: 2px 7px; border-radius: 999px;
+  color: #2a1c00; background: var(--error-solid);
+}
+
+/* ============ 卡片光标跟随 ============ */
+
+/* ⚠ 这一整段的效果**同时作用于** `#cardSections .fcard` 与 `#presetSections .pcard`
+   （预设卡片，见 drawer.css 的 .pcard）。
+   两处必须一起写进每条选择器：网点层的画序、4 层点径、触屏关闭都是"少改一处就
+   静默坏掉"的东西（少改的那一族卡片会表现得像"没有效果"，不报任何错）。
+   两边共用的前提有两条，改动时别破坏：
+     · 卡片里都有承载网点层的 `<span class="*__dots" aria-hidden="true">`
+     · 两个容器都调过 `bindFollow(...)`（`initCardFollow` / `initPresetFollow`）
+   `fcard--new` / `fcard--blocked` / `is-added` 这些是功能卡片专有的，不跟过来。 */
+
+/* 1. 卡片裁剪容器 + 底色渐变层 */
+#cardSections .fcard,
+#presetSections .pcard {
+  position: relative;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+/* 彩色半调（AM 网点）：**近处点大、远处点小**。
+   一层做不到"近大远小" —— mask 作用于整个元素，**不能按 background 分层**，
+   所以同一层里点径只能固定。改成叠 4 层：每层一个点径 + 自己的径向遮罩，
+   四层共用同一个格网原点，于是点同心、由外到内一层比一层大。
+   最外层 reach 最大、点最小，并用第二色 → 远处细的副 ink、近处被放大的主 ink 盖住。
+   代价是每张卡多一个 <span class="fcard__dots">（它的两个伪元素贡献剩下两层）。 */
+/* `content` 只给伪元素 —— 别写进下面那条共用规则：它是给**真实元素**
+   `.fcard__dots` 也命中的，而给真实元素设 content 会让它按替换元素渲染，
+   背景整个不画。踩过：外层两层网点在画面上完全消失，量出来跟底色一模一样。 */
+#cardSections .fcard::after,
+#cardSections .fcard > .fcard__dots::before,
+#cardSections .fcard > .fcard__dots::after,
+#presetSections .pcard::after,
+#presetSections .pcard > .pcard__dots::before,
+#presetSections .pcard > .pcard__dots::after { content: "";}
+
+#cardSections .fcard::after,
+#cardSections .fcard > .fcard__dots,
+#cardSections .fcard > .fcard__dots::before,
+#cardSections .fcard > .fcard__dots::after,
+#presetSections .pcard::after,
+#presetSections .pcard > .pcard__dots,
+#presetSections .pcard > .pcard__dots::before,
+#presetSections .pcard > .pcard__dots::after {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-radius: inherit;
+  z-index: 0;
+  opacity: 0;
+  transition: opacity .28s ease;
+  background-repeat: repeat;
+  background-size: var(--spot-cell) var(--spot-cell);
+  background-position: 0 0;
+}
+#cardSections .fcard:hover::after,
+#cardSections .fcard:hover > .fcard__dots,
+#cardSections .fcard:hover > .fcard__dots::before,
+#cardSections .fcard:hover > .fcard__dots::after,
+#presetSections .pcard:hover::after,
+#presetSections .pcard:hover > .pcard__dots,
+#presetSections .pcard:hover > .pcard__dots::before,
+#presetSections .pcard:hover > .pcard__dots::after { opacity: 1; }
+
+/* 保底：不支持 mask 时用回实心光晕，绝不出现"整卡铺满网点"的破图 */
+#cardSections .fcard::after,
+#presetSections .pcard::after {
+  background-image: radial-gradient(
+    circle at var(--mx, 50%) var(--my, 50%),
+    color-mix(in srgb, var(--spot-mix-base) var(--spot-a1), transparent) 0%,
+    color-mix(in srgb, var(--spot-mix-base) var(--spot-a2), transparent) 28%,
+    color-mix(in srgb, var(--spot-mix-base) var(--spot-a3), transparent) 70%
+  );
+}
+
+@supports (mask-image: none) or (-webkit-mask-image: none) {
+  /* 四层共用同一个遮罩形状，只是各自的 reach 不同 */
+  #cardSections .fcard::after,
+  #cardSections .fcard > .fcard__dots,
+  #cardSections .fcard > .fcard__dots::before,
+  #cardSections .fcard > .fcard__dots::after,
+  #presetSections .pcard::after,
+  #presetSections .pcard > .pcard__dots,
+  #presetSections .pcard > .pcard__dots::before,
+  #presetSections .pcard > .pcard__dots::after {
+    -webkit-mask-image: radial-gradient(circle at var(--mx, 50%) var(--my, 50%),
+        rgb(0 0 0 / var(--spot-a1)) 0%,
+        rgb(0 0 0 / var(--spot-a2)) calc(var(--spot-reach) * 0.62),
+        rgb(0 0 0 / var(--spot-a3)) var(--spot-reach));
+    mask-image: radial-gradient(circle at var(--mx, 50%) var(--my, 50%),
+        rgb(0 0 0 / var(--spot-a1)) 0%,
+        rgb(0 0 0 / var(--spot-a2)) calc(var(--spot-reach) * 0.62),
+        rgb(0 0 0 / var(--spot-a3)) var(--spot-reach));
+  }
+
+  /* 点径由外到内递增、reach 递减；**画序也必须由小到大**。
+     伪元素的绘制顺序是树序：`.fcard__dots`（元素本身）→ 它的 ::before → ::after
+     → `.fcard::after`（父元素的 ::after 是最后一个子节点，画在最上面）。
+     所以最小的那层要放 `.fcard__dots`，最大的放 `.fcard::after` ——
+     放反了的话，小点会盖在大点上面，点芯颜色和"近大远小"的观感一起坏掉。 */
+  #cardSections .fcard > .fcard__dots,
+  #presetSections .pcard > .pcard__dots {
+    --spot-reach: var(--spot-reach-1);
+    background-image: radial-gradient(circle closest-side,
+      color-mix(in srgb, var(--spot-mix-base) var(--spot-alt-a), transparent) 0 var(--spot-dot-1),
+      transparent calc(var(--spot-dot-1) + 1%));
+  }
+  #cardSections .fcard > .fcard__dots::before,
+  #presetSections .pcard > .pcard__dots::before {
+    --spot-reach: var(--spot-reach-2);
+    background-image: radial-gradient(circle closest-side,
+      var(--spot-mix-base) 0 var(--spot-dot-2),
+      transparent calc(var(--spot-dot-2) + 1%));
+  }
+  #cardSections .fcard > .fcard__dots::after,
+  #presetSections .pcard > .pcard__dots::after {
+    --spot-reach: var(--spot-reach-3);
+    background-image: radial-gradient(circle closest-side,
+      var(--spot-mix-base) 0 var(--spot-dot-3),
+      transparent calc(var(--spot-dot-3) + 1%));
+  }
+  #cardSections .fcard::after,
+  #presetSections .pcard::after {
+    --spot-reach: var(--spot-reach-4);
+    background-image: radial-gradient(circle closest-side,
+      var(--spot-mix-base) 0 var(--spot-dot-4),
+      transparent calc(var(--spot-dot-4) + 1%));
+  }
+}
+
+/* .fcard__dots 是卡片子元素，会被上面那条 `> *` 抬到 z-index 1（压住文字）——
+   这里必须显式按回 0：它是网点层，得待在内容下面。 */
+#cardSections .fcard > .fcard__dots,
+#presetSections .pcard > .pcard__dots {
+  z-index: 0;
+}
+
+/* 内容抬到渐变层之上 */
+#cardSections .fcard > *,
+#presetSections .pcard > * {
+  position: relative;
+  z-index: 1;
+}
+
+/* 2. 整卡跟随：位移 + 3D 倾斜 */
+#cardSections .fcard:not(.fcard--new),
+#presetSections .pcard {
+  transform:
+    perspective(600px)
+    translate3d(
+      calc(var(--nx, 0) * 6px),
+      calc(var(--ny, 0) * 6px),
+      0
+    )
+    rotateX(calc(var(--ny, 0) * -5deg))
+    rotateY(calc(var(--nx, 0) *  5deg));
+  transform-origin: center center;
+  perspective: 800px;
+  perspective-origin: center center;
+  /* `scale` 也在这条里：按下反馈（:active 的 scale .94）要能弹回来。
+     fcard 那条"松手弹回"的规则会覆盖它，两条的值一致。 */
+  transition: transform .18s cubic-bezier(.22, .61, .36, 1),
+              scale     .18s cubic-bezier(.22, .61, .36, 1),
+              background .14s, border-color .14s, box-shadow .14s;
+}
+#cardSections .fcard:not(.fcard--new):hover,
+#presetSections .pcard:hover {
+  box-shadow:
+    /*0 0px 24px color-mix(in srgb, var(--fill-primary) 25%, transparent ),*/
+    0 2px 6px  color-mix(in srgb, var(--on-fill) 25%, rgba(0, 0, 0, 0.2) ),
+    inset 0 0 24px -8px var(--bg-surface);
+  z-index: 56;
+}
+
+/* 3. 内部元素视差 */
+#cardSections .fcard:hover .fcard__ico,
+#presetSections .pcard:hover .pcard__ico {
+  background: linear-gradient(.35turn, #fff4, #fff5);
+  box-shadow:0px 0px 4px  color-mix(in srgb, var(--fill-primary) 50%,transparent );
+  border: 1px solid rgba(255,255,255,0.3);
+  backdrop-filter: blur(2px) saturate(1.2);
+  -webkit-backdrop-filter: blur(2px) saturate(1.2);
+  /* `scale` 带上：按下时卡片缩到 .94，图标自己那条 transition 得能补间 */
+  transition: background-color .14s, backdrop-filter .14s, -webkit-backdrop-filter .14s,
+              scale .18s cubic-bezier(.22, .61, .36, 1);
+}
+/* 关掉 3D 跟随（html[data-fx="off"]）时，hover 的图标不再叠毛玻璃。
+   这层模糊本来是为 3D 视差服务的 —— 图标要"浮"在卡片内容之上，需要一点厚度感；
+   关掉 3D 之后它只剩下"每帧重新模糊一次"的代价，观感上也不再需要。
+   只去 backdrop-filter：半透明白渐变 / 白描边 / 发光阴影按原样保留。
+   特异性够（比上面那条多一个属性选择器），不依赖文件顺序。 */
+html[data-fx="off"] #cardSections .fcard:hover .fcard__ico,
+html[data-fx="off"] #presetSections .pcard:hover .pcard__ico {
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+#cardSections .fcard:not(.fcard--new) .fcard__ico,
+#presetSections .pcard .pcard__ico {
+  --kx:   0.5;      /* 右移 X 衰减 */
+  --kyRaw:0.4;      /* Y 原始量衰减，主调这个（下移过多就压小） */
+  --kz:   0.5;      /* 正 z 衰减 */
+  --kry:  0.6;      /* rotateY 正值衰减 */
+
+  /* 先把 ny 整体缩小，后面 z / rotateX 都吃这个值 */
+  --nyE: calc(var(--ny, 0) * var(--kyRaw));
+
+  --px: calc(var(--nx, 0) * 8px);
+  --py: calc(var(--nyE)      * 8px);
+  --pz: calc((var(--nx, 0) + var(--nyE)) * 8px);
+  --rx: calc(var(--nyE) * -11deg);
+  --ry: calc(var(--nx, 0) *  11deg);
+
+  transform:
+    perspective(400px)
+    translate3d(
+      calc(min(0px, var(--px)) + max(0px, var(--px)) * var(--kx)),
+      calc(min(0px, var(--py)) + max(0px, var(--py)) * 1),      /* py 已衰减过 */
+      calc(min(0px, var(--pz)) + max(0px, var(--pz)) * var(--kz))
+    )
+    rotateX(calc(min(0deg, var(--rx)) + max(0deg, var(--rx)) * 1)) /* rx 已衰减 */
+    rotateY(calc(min(0deg, var(--ry)) + max(0deg, var(--ry)) * var(--kry)));
+
+  /* 同上：图标自己的 transition 里也要带 `scale`（按下反馈在图标上也看得见） */
+  transition: transform .14s ease-out, scale .18s cubic-bezier(.22, .61, .36, 1),
+              box-shadow .1s ease;
+}
+#cardSections .fcard:is(.fcard--new) .fcard__ico {
+  --k: 0.5;                                  /* ← 右移衰减系数，主调这个 */
+
+  --px: calc(var(--nx, 0) * 4px);
+  --py: calc(var(--ny, 0) * 3px);
+
+  transform: translate(
+    /* X：只衰减正值 */
+    calc(min(0px, var(--px)) + max(0px, var(--px)) * var(--k)),
+    /* Y：如果 Y 也偏得多，套同一公式；不想衰减就直接 var(--py) */
+    calc(min(0px, var(--py)) + max(0px, var(--py)) * var(--k))
+  );
+
+  transition: transform .14s ease-out, box-shadow .1s ease;
+}
+
+
+#cardSections .fcard:not(.fcard--new):hover .fcard__desc {
+  -webkit-text-stroke: 3px var(--tint-primary);
+  paint-order: stroke fill;
+}
+#presetSections .pcard:hover .pcard__desc {
+  -webkit-text-stroke: 3px color-mix(in srgb, var(--tint-primary) , var(--bg-app));
+  paint-order: stroke fill;
+}
+
+#cardSections .fcard:not(.fcard--new):hover .fcard__name,
+#presetSections .pcard:hover .pcard__name {
+  -webkit-text-stroke: 1px var(--tint-primary);
+  paint-order: stroke fill;
+}
+
+#cardSections .fcard:not(.fcard--new) .fcard__name,
+#presetSections .pcard .pcard__name {
+  translate: calc(var(--nx, 0) * 2px) calc(var(--ny, 0) * 1px);
+  transition: translate .12s ease-out;
+}
+#cardSections .fcard:not(.fcard--new) .fcard__desc,
+#presetSections .pcard .pcard__desc {
+  translate: calc(var(--nx, 0) * 1px) calc(var(--ny, 0) * .5px);
+  transition: translate .12s ease-out;
+
+}
+#cardSections .fcard:not(.fcard--new) .fcard__foot,
+#presetSections .pcard .pcard__foot {
+  translate: calc(var(--nx, 0) * 1px);
+  transition: translate .12s ease-out;
+}
+
+/* 5. will-change 只在 hover 期间给，不再常驻。
+   常驻 = 69 张卡 + 69 个图标**永久**占着独立合成层（GPU 显存峰值实测 ~675MB，
+   而抽屉收起时这些卡片根本不可见）。而且卡片还会因为 --mx/--my 重绘，
+   一个会重绘的层每次都要重新栅格化再上传 —— 常驻提升本来就没赚到。
+   真正的动画只在 hover 时发生，所以提示也只给 hover 期间。 */
+#cardSections .fcard:not(.fcard--new):hover,
+#cardSections .fcard:not(.fcard--new):hover .fcard__ico,
+#cardSections .fcard--new:hover .fcard__ico,
+#presetSections .pcard:hover,
+#presetSections .pcard:hover .pcard__ico {
+  will-change: transform;
+}
+
+/* 4. 触屏关闭所有跟随 */
+@media (hover: none) {
+  #cardSections .fcard::after,
+  #presetSections .pcard::after { display: none; }
+  #cardSections .fcard:not(.fcard--new),
+  #presetSections .pcard {
+    transform: none !important;
+  }
+  #cardSections .fcard .fcard__ico,
+  #cardSections .fcard .fcard__name,
+  #cardSections .fcard .fcard__desc,
+  #cardSections .fcard .fcard__foot,
+  #presetSections .pcard .pcard__ico,
+  #presetSections .pcard .pcard__name,
+  #presetSections .pcard .pcard__desc,
+  #presetSections .pcard .pcard__foot {
+    translate: none !important;
+  }
+}
+/* ============ 卡片点击反馈 ============ */
+
+/* 按下：轻微缩小 + 阴影收拢，像被按下去 */
+#cardSections .fcard:not(.fcard--new):active,
+#presetSections .pcard:active {
+  scale: 0.94;
+  box-shadow: var(--shadow-sm),
+              0 0 0 2px var(--tint-primary) inset;
+  transition: scale .09s ease-out,
+              box-shadow .09s ease-out;
+}
+
+/* 松手：快速弹回。
+   ⚠ 这里**不写通用的 `.pcard` 过渡**：`.pcard__name/__desc/__foot/__ico` 各有自己的
+   transition（视差 + hover 玻璃态），再给卡片本体来一条同特异性的通用规则就会把它们
+   一起顶掉 —— 表现是"按下有反馈、但图标 hover 不再变玻璃"这种半坏。
+   `.pcard` 的过渡写在下面它自己那两条规则里（跟随 / 图标），这里只管 fcard。 */
+#cardSections .fcard:not(.fcard--new) {
+  transition:
+    transform .18s cubic-bezier(.22, .61, .36, 1),
+    scale     .18s cubic-bezier(.22, .61, .36, 1),
+    background .14s, border-color .14s, box-shadow .14s;
+}
+
+/* ── 释放：指针离开时把倾斜缓回，与模态同一条缓动 ──────────────────────
+   卡片本来就带 .18s 的 transform 过渡（上面那条），所以**不是**瞬变；
+   这一条只是把"离开那一次"放慢到 .30s + 更强的缓出，让三种跟随效果
+   （模态 / 功能卡片 / 预设卡片）的退出一致。
+   跟随期间仍走 .18s（手感不变）—— `.is-returning` 只在 clearFollow 那一刻挂上，
+   380ms 后由 app.js 摘掉。
+   特异性 (1,3,0) > 下面那条"松手弹回"的 (1,2,0)，所以不依赖文件顺序。 */
+#cardSections .fcard.is-returning:not(.fcard--new),
+#presetSections .pcard.is-returning {
+  transition:
+    transform .30s cubic-bezier(.22, 1, .36, 1),
+    scale     .18s cubic-bezier(.22, .61, .36, 1),
+    background .14s, border-color .14s, box-shadow .14s;
+}
+
+
+
+/* 触屏：按下反馈保留，缩放更明显一点，手指感知更强 */
+@media (hover: none) {
+  #cardSections .fcard:not(.fcard--new):active,
+  #presetSections .pcard:active {
+    scale: 0.94;
+  }
+}
+/* ============ 不可选：链尾决定（方案 §3.2.4） ============
+   典型：`打包 ZIP` 之后所有卡片都不可选 —— ZIP 交出的是压缩包，
+   没有任何 op 接得住它。**只置灰并给原因，不隐藏**：藏起来用户会以为
+   "这张卡不见了"，置灰 + title 才说明得了"是顺序的问题，不是功能没了"。 */
+#cardSections .fcard.fcard--blocked {
+  opacity: .42;
+  cursor: not-allowed;
+  filter: saturate(.35);
+}
+#cardSections .fcard.fcard--blocked:hover {
+  background:
+    linear-gradient(var(--bg-surface-alt), var(--bg-surface-alt)) padding-box,
+    linear-gradient(var(--border), var(--border))                 border-box;
+  box-shadow: none;
+  transform: none;
+}
+/* 置灰时**不要**再显示"已在链中"的对勾 —— 两者语义冲突 */
+#cardSections .fcard.fcard--blocked::before { opacity: 0 !important; scale: .4 !important; }
+
+/* ============ 已加入执行链：右上角对勾（常驻伪元素 + transition） ============ */
+
+
+#cardSections .fcard::before {
+  content: "✓";
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--fill-primary);
+  color: var(--on-fill);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  box-shadow: 0 1px 3px rgb(75 87 99 / 0.22);
+  z-index: 3;
+  pointer-events: none;
+
+  /* 默认隐藏 */
+  opacity: 0;
+  scale: .4;
+
+  transition:
+    opacity .22s ease,
+    scale .26s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+/* 加入时：淡入 + 弹一下（曲线带过冲） */
+#cardSections .fcard.is-added::before {
+  opacity: 1;
+  scale: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #cardSections .fcard::before { transition: none; }
+  /* 网点本身不是位移动画，保留；只去掉淡入 */
+  #cardSections .fcard::after,
+  #presetSections .pcard::after { transition: none; }
+}
+/* 搜索：固定在窗口最底部，点击唤出 + 缓出 */
+.drawer__search {
+  flex: 0 0 auto;
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+.searchbtn {
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  font-size: 13px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+  cursor: pointer; color: var(--text-muted);
+  transition: background .16s, color .16s, border-color .16s;
+}
+.searchbtn:hover { background: var(--tint-primary); color: var(--ink); border-color: var(--border-strong); }
+.searchbtn svg { width: 15px; height: 15px; }
+
+.searchfield {
+  flex: 1 1 auto;
+  display: flex; align-items: center; gap: 8px;
+  min-width: 0;
+  /* 缓出：宽度 + 透明度一起展开，起手快、收尾慢 */
+  max-width: 0; opacity: 0; overflow: hidden;
+  transition: max-width .34s cubic-bezier(.16,1,.3,1),
+              opacity .26s cubic-bezier(.16,1,.3,1);
+}
+.drawer__search[data-search="open"] .searchbtn { display: none; }
+.drawer__search[data-search="open"] .searchfield { max-width: 100%; opacity: 1; }
+
+/* 收起但过滤词还在（失焦收回保留了过滤）：按钮上挂个小点提示，
+   免得用户以为卡片丢了 —— 再点一次即可继续编辑/清除。 */
+.drawer__search[data-filtered="true"] .searchbtn {
+  background: var(--tint-primary); color: var(--ink); border-color: var(--border-strong);
+}
+.drawer__search[data-filtered="true"] .searchbtn::after {
+  content: ''; flex: 0 0 auto;
+  width: 6px; height: 6px; border-radius: 50%;
+  background: currentColor; opacity: .7;
+}
+.input--search { flex: 1 1 auto; min-width: 0; width: auto; }
+
+/* 执行链：容器已移到顶栏（.chainbar），这里只保留链本身的外观 */
+.chain { flex: 1; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; min-height: 26px; }
+.chain__item {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; font-size: 12.5px;
+  background: var(--fill-primary); color: var(--on-fill);
+  border-radius: 999px;
+}
+.chain__item button {
+  background: transparent; border: 0; cursor: pointer; color: inherit;
+  font-size: 14px; line-height: 1; padding: 0 0 0 2px; opacity: .65;
+}
+.chain__item button:hover { opacity: 1; }
+.chain__arrow { color: var(--text-muted); font-size: 12px; }
+.chain__empty { font-size: 12px; color: var(--text-muted); }
+/* ==================== ui/overlays.css ==================== */
+/* ============================== 拖拽导入 ============================== */
+
+.dropzone {
+  position: fixed; inset: 0; z-index: 200;
+  display: grid; place-items: center;
+  background: rgb(0 0 0 / .38);
+  backdrop-filter: blur(3px);
+  transition: background .16s, opacity .16s;
+}
+/* [hidden] 已被全局 !important 规则压住，这里只负责显示态 */
+.dropzone__box {
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+  padding: 42px 60px;
+  background: var(--bg-surface);
+  border: 2px dashed var(--border-strong);
+  border-radius: var(--radius-workspace);
+  box-shadow: var(--shadow-md);
+  text-align: center;
+}
+.dropzone__box svg { width: 46px; height: 46px; color: var(--ink); opacity: .75; }
+.dropzone__box strong { font-size: 17px; }
+.dropzone__box span { font-size: 12.5px; color: var(--text-muted); }
+.dropzone[data-over="true"] .dropzone__box { border-color: var(--fill-primary); background: var(--tint-primary); }
+
+/* ============================== 上传进度 ============================== */
+
+.uploadbar {
+  position: fixed; right: 20px; bottom: 20px; z-index: 190;
+  width: 300px; padding: 13px 15px;
+
+  /* 半透明背景 —— 让背后的内容能透过来被模糊 */
+  background: color-mix(in srgb, var(--bg-surface) 55%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 50%, transparent);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
+
+  /* 毛玻璃核心 */
+  -webkit-backdrop-filter: blur(10px) saturate(180%);
+  backdrop-filter: blur(10px) saturate(180%);
+}
+.uploadbar__row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+.uploadbar__row strong { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.uploadbar__acts { display: flex; justify-content: flex-end; margin-top: 8px; }
+.uploadbar .progress { margin-top: 8px; }
+.uploadbar .progress > i { background: var(--fill-accent); }
+
+/* ============================== 右键菜单 ============================== */
+
+.ctxmenu {
+  position: fixed; z-index: 220;
+  min-width: 190px; padding: 5px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-inner);
+  box-shadow: var(--shadow-md);
+}
+.ctxmenu__head {
+  padding: 6px 10px 7px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+/* 卡片右键菜单标题里的「内置 / 自定义」小标签 */
+.ctxmenu__tag {
+  margin-left: 6px; padding: 1px 6px;
+  font-size: 10px; vertical-align: 1px;
+  color: var(--on-fill); background: var(--fill-primary);
+  border-radius: 999px;
+}
+.ctxmenu__item {
+  display: flex; align-items: center; gap: 9px;
+  width: 100%; padding: 7px 10px;
+  background: transparent; border: 0; border-radius: 7px;
+  font-size: 13px; text-align: left; color: var(--ink);
+  cursor: pointer;
+}
+.ctxmenu__item:hover { background: var(--fill-primary); color: var(--on-fill); }
+.ctxmenu__item:disabled { opacity: .42; cursor: not-allowed; }
+.ctxmenu__item:disabled:hover { background: transparent; color: var(--ink); }
+.ctxmenu__item svg { width: 15px; height: 15px; flex: 0 0 auto; opacity: .8; }
+.ctxmenu__item kbd {
+  margin-left: auto; font-size: 10.5px; font-family: inherit;
+  color: var(--text-muted);
+  padding: 1px 5px; border-radius: 4px;
+  background: var(--bg-surface-alt); border: 1px solid var(--border);
+}
+.ctxmenu__item:hover kbd { color: var(--on-fill); background: transparent; border-color: transparent; }
+.ctxmenu__sep { height: 1px; margin: 4px 6px; background: var(--border); }
+.ctxmenu__item--danger { color: var(--error-solid); }
+.ctxmenu__item--danger:hover { background: var(--error-solid); color: #fff; }
+
+/* ============================== 通知 ============================== */
+
+.notice {
+  --notice-gap: 20px;
+  --notice-shift: calc(100% + var(--notice-gap));  /* 自身宽 + right 间距 */
+
+  position: fixed;
+  right: var(--notice-gap);
+  top: 100px;
+  z-index: var(--z-notice);
+  display: flex; align-items: center; gap: 11px;
+  width: 320px; padding: 13px 15px;
+
+  background: color-mix(in srgb, var(--bg-surface) 40%, transparent);
+  border: 1px solid color-mix(in srgb, var(--border-strong) 50%, transparent);
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-md);
+
+  -webkit-backdrop-filter: blur(6px) saturate(140%);
+  backdrop-filter: blur(6px) saturate(140%);
+
+  /* ↓ 关闭态（默认） */
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateX(var(--notice-shift));
+  opacity: 0;
+  transition:
+    transform 340ms cubic-bezier(.22, 1, .36, 1),
+    opacity   200ms ease,
+    visibility 0s linear 340ms;   /* 等滑完再真正 hidden */
+}
+
+/* 关键：全局 [hidden]{display:none} 会让我们没法过渡。
+   这条把它顶成 flex，显隐完全交给上面的 visibility。
+   和 .modal[hidden]{display:grid} 是同一个手法。 */
+.notice[hidden] { display: flex !important; }
+
+/* ↓ 打开态 */
+.notice.is-open {
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateX(0);
+  opacity: 1;
+  transition:
+    transform 340ms cubic-bezier(.22, 1, .36, 1),
+    opacity   200ms ease,
+    visibility 0s;                /* 打开时立即可见 */
+}
+
+.notice[data-kind="error"] { background: var(--error-tint); }
+
+@media (prefers-reduced-motion: reduce) {
+  .notice {
+    transition: opacity 1ms linear, visibility 0s linear 1ms;
+    transform: none;
+  }
+}
+.notice__icon { flex: 0 0 auto; display: grid; place-items: center; color: var(--ink); }
+.notice__icon svg { width: 20px; height: 20px; }
+.notice__text { flex: 1; display: flex; flex-direction: column; font-size: 12.5px; min-width: 0; }
+.notice__text strong { font-size: 13px; }
+.notice__text span { color: var(--ink); opacity: .8; }
+
+/* ============================== 模态 ============================== */
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+
+  /* 用 visibility 控制显隐，才能过渡 */
+  visibility: hidden;
+  pointer-events: none;
+  /* 关闭时：等淡出动画播完（.20s）再真正隐藏 */
+  transition: visibility 0s linear .20s;
+}
+
+/* 关键：覆盖浏览器默认的 [hidden]{display:none}，
+   否则元素仍是 display:none，无法过渡 */
+.modal[hidden] { display: grid; }
+
+.modal.is-open {
+  visibility: visible;
+  pointer-events: auto;
+  transition: visibility 0s;   /* 打开时立即可见 */
+}
+
+/* ---- 背景遮罩：模糊 + 变暗 一起过渡 ---- */
+.modal__scrim {
+  position: absolute;
+  inset: 0;
+  background: rgb(0 0 0 / 0);
+  transition: background-color .16s ease;   /* 不再过渡 backdrop-filter */
+}
+.modal.is-open .modal__scrim {
+  background: rgb(0 0 0 / .32);
+  /* 删掉 -webkit-backdrop-filter / backdrop-filter */
+}
+
+/* ---- 弹框：绕偏下的水平轴旋入 + 自下而上升起 ---- */
+
+.modal {
+  perspective: 1000px;
+  perspective-origin: center center;
+}
+
+.modal__box {
+  position: relative;
+  width: 480px;
+  padding: 22px 24px;
+  /* 毛玻璃分两条路（见下面两条规则）：
+       · 3D 开着（默认）→ **常开**，旋入动画期间也带玻璃质感；
+       · 3D 关掉      → 动画期间不开，等 .is-settled 再开
+                        （盒子在动 → 模糊采样区在动 → 每帧重新模糊一次；
+                         480px 宽、DPR2 下近百万像素，trace 里就是 GPU 侧那段开销）。
+     所以底色恢复成原设计的 27%/33%；3D 关掉那一段另给一档更实的补层次感。 */
+  background: linear-gradient(.35turn,
+    color-mix(in srgb, var(--bg-surface), transparent 27%),
+    color-mix(in srgb, var(--bg-surface), transparent 33%)
+  );
+  border: 1px solid color-mix(in srgb, var(--bg-surface), #fffa 33%) ;
+  border-radius: 30px;
+  box-shadow: var(--shadow-md);
+
+  /* —— 三个可调参数 —— */
+  --enter-rx:  -72deg;     /* 初始旋转角：越大越"躺平"，越小越接近竖起 */
+  --enter-ty:   100px;      /* 初始下移量：越大起手越低 */
+  --enter-scale: .965;     /* 初始缩放：略小一点，落到 1 时更有"到位"感 */
+
+  /* 旋转轴的位置：50% 88% 表示水平方向居中、纵向靠近底边（离底 12%）。
+     轴越靠下，"从下掀起"的感觉越强。 */
+  transform-origin: 50% 10%;
+
+  opacity: 0;
+
+  /* translate / scale 走独立属性，transform 留给旋转 ——
+     计算顺序 translate → rotate → scale → transform，互不覆盖。 */
+  translate: 0 var(--enter-ty);
+  scale: var(--enter-scale);
+  transform:
+    rotateX(calc(var(--enter-rx) + var(--ny, 0) * -1.4deg))
+    rotateY(calc(var(--nx, 0) * 1.4deg));
+
+  transition:
+    opacity   .16s ease,
+    /* 三个属性给同一时长同一缓动，保证它们是"一个动作"；
+       想错开节奏就改这里的时长（见下方"调参"） */
+    translate .30s cubic-bezier(.22, 1, .36, 1),
+    scale     .30s cubic-bezier(.22, 1, .36, 1),
+    transform .30s cubic-bezier(.22, 1, .36, 1);
+}
+
+.modal.is-open .modal__box {
+  --enter-rx: 0deg;
+  --enter-ty: 0px;
+  --enter-scale: 1;
+  opacity: 1;
+  /* will-change 只在打开期间给：常驻 = 两个模态各永久占一层合成层。
+     常驻版本原来还和 backdrop-filter 叠在一起，那是显存峰值的一个来源。 */
+  will-change: translate, scale, transform;
+}
+
+/* ── 毛玻璃：3D 开着就常开 ───────────────────────────────────────────
+   作用域用 .modal:not([hidden]) 而不是无条件的 .modal__box：
+     · 打开中 / 渐隐中（hidden 还没置上）→ 开，和"常开"等效，
+       而且渐隐那 200ms 也不会像挂 .is-open 那样把玻璃"啪"地摘掉；
+     · 完全关闭后（closeModal 200ms 后置 hidden:true）→ 不算，
+       免得给一个不画出来的元素留一份模糊。 */
+html:not([data-fx="off"]) .modal:not([hidden]) .modal__box {
+  backdrop-filter: blur(6px) saturate(1.2);
+  -webkit-backdrop-filter: blur(6px) saturate(1.2);
+}
+
+/* ── 毛玻璃：3D 关掉时改成"落定后再开" ────────────────────────────────
+   动画期间盒子在动、模糊采样区跟着动，每帧都要重新模糊一次；
+   关掉 3D 的时候不要再付这份代价。动画这一段没有玻璃，
+   底色用更实的一档补回层次感（落定后回到设计值）。 */
+html[data-fx="off"] .modal:not(.is-settled) .modal__box {
+  background: linear-gradient(.35turn,
+    color-mix(in srgb, var(--bg-surface), transparent 14%),
+    color-mix(in srgb, var(--bg-surface), transparent 20%)
+  );
+}
+html[data-fx="off"] .modal.is-open.is-settled .modal__box {
+  backdrop-filter: blur(6px) saturate(1.2);
+  -webkit-backdrop-filter: blur(6px) saturate(1.2);
+}
+
+/* ── 落定之后不再过渡 transform ───────────────────────────────────────
+   旋入与淡出需要它（--enter-rx 从 -72deg 到 0）。但**落定之后**，
+   跟随效果每帧都在改 --nx/--ny → .modal__box 的 transform 每帧都在变 →
+   会把那条 .30s 的 transform 过渡**每帧重启一次**；而在一个
+   backdrop-filter + position:fixed 的盒子上跑着 transform 过渡，
+   会让它**每帧做一次 Layout**（Layout 又直接带动后面的绘制/光栅/GPU）。
+
+   实测同一段操作（30 次真实 pointermove，3D 开、模态已落定）：
+       baseline            Layout +88
+       去掉 transform 过渡  Layout +15      ← 这一条
+   保留 opacity / translate / scale：关闭时的淡出还要用；
+   closeModal 会摘掉 .is-settled，于是 transform 过渡在退出时自动恢复。
+
+   代价：指针移出模态时，那个 1.4deg 的倾斜从"缓回"变成"直接回正"。
+   倾斜量本来就小，且换掉的是每帧一次布局，值得。 */
+.modal.is-settled .modal__box {
+  transition-property: opacity, translate, scale;
+}
+
+/* ── 释放：让"指针离开"这一次的回正走成过渡，而不是瞬变 ────────────────
+   上面那条把 transform 从过渡列表里拿掉，是为了省**连续跟随**期间的开销：
+   --nx/--ny 每帧都变 → 过渡每帧被重启 → 每帧一次 Layout（实测 +88 → +15）。
+   代价就是指针一离开、变量被摘掉，倾斜会**一帧跳回平整**（实测：逐帧采样
+   computed transform 只有 1 个不同值 = SNAP；fcard/pcard 是 12 个 = 本来就有动画）。
+
+   这一条只在"释放那一次"把 transform 加回列表：那是**单次**变化，不会带回那个开销。
+   `.is-returning` 由 app.js 的 clearFollow() 在摘掉变量**之前**挂上（同一帧内完成，
+   按 CSS Transitions 规范，起不起过渡看的是**变化后**样式里的 transition-property，
+   所以这样挂是有效的），380ms 后摘掉；指针又进来时由 cancelReturning() 立刻摘掉，
+   免得连续跟随又变成"每帧重启过渡"。
+
+   时长/缓动不用在这里写：基础规则里 `transition: … transform .30s
+   cubic-bezier(.22, 1, .36, 1)` 已经给了，这里只把属性名重新加回列表
+   （属性列表与时长列表按位置对应：opacity .16s / translate .30s /
+   scale .30s / transform .30s）。 */
+.modal.is-settled .modal__box.is-returning {
+  transition-property: opacity, translate, scale, transform;
+}
+
+/* ⚠ 别想着用伪元素给 .modal__box 内扩命中区来治"边缘抖动"——试过，不行。
+   加 `::after { inset: -8px }` 之后，内侧 1–5px 那 5 条翻转带确实消失了，
+   但把内外一起扫（-12..14px）会看到**多出 6 条翻转带，落在边缘外 2–7px**
+   （实测）。原因：伪元素是盒子的子节点，**跟着盒子一起被变换** ——
+   内边距自己也会缩进，只是把不稳定带从内侧挪到了外侧。
+   真正的修法在 app.js：这类目标的命中判定改用**布局矩形**（与 transform 无关），
+   见 bindFollow() 的 stableHit 说明。 */
+
+@media (prefers-reduced-motion: reduce) {
+  .modal__box {
+    translate: none;
+    scale: none;
+    transform: none;
+    transition: opacity .01ms;
+  }
+}
+.modal__title { margin: 0; font-size: 17px; }
+.modal__sub { margin: 3px 0 16px; font-size: 12px; color: var(--text-muted); }
+
+/* 标题的视差：走卡片里文字那一路（cardlib.css 的 .fcard__name 一档），
+   位移量取同样的 2px / 1px —— 这样模态里的元素和卡片里的元素是同一套景深阶梯：
+     图标 8px 且带 3D 倾斜（.iconpick__btn / .fcard__ico） ＞ 标题 2px/1px ＞ 正文 1px/0.5px
+   --nx/--ny 同样是 bindFollow() 写在 .modal__box 上、再继承下来的，
+   **不需要新 JS**。3D 关掉时整段不生效。
+   注：.modal__sub 暂未加（没要求）；要加的话照这一条换个更小的系数即可。 */
+html:not([data-fx="off"]) .modal__title {
+  translate: calc(var(--nx, 0) * 2px - 2px) calc(var(--ny, 0) * 1px - 3px);
+  transition: translate .12s ease-out;
+  text-shadow:1px 1px 5px  color-mix(in srgb, var(--fill-primary) 30%,#aaaa );
+}
+html:not([data-fx="off"]) .modal__acts > .btn--primary{
+  translate: calc(var(--nx, 0) * 2px + 2px) calc(var(--ny, 0) * 1px + 3px);
+  transition: translate .12s ease-out;
+  box-shadow: -1px -1px 5px  color-mix(in srgb, var(--fill-primary) 30%,#aaaa );
+}
+html:not([data-fx="off"]) .modal__sub{
+  translate: calc(var(--nx, 0) * 1px - 1px) calc(var(--ny, 0) * .5px - 1.5px);
+  transition: translate .12s ease-out;
+}
+html:not([data-fx="off"]) .modal__acts > .btn--ghost{
+  translate: calc(var(--nx, 0) * 1px + 1px) calc(var(--ny, 0) * .5px + 1.5px);
+  transition: translate .12s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-fx="off"]) .modal__title { translate: none; }
+}
+.modal__form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  /* min-width:0 必不可少：否则 grid 轨道被输入框的固有宽度撑开，
+     整表单超出模态盒子（实测越界 35px） */
+  min-width: 0;
+}
+.field {
+  display: flex; flex-direction: column; gap: 4px;
+  min-width: 0;
+}
+.field--wide { grid-column: 1 / -1; }
+.field label { font-size: 11.5px; color: var(--text-muted); }
+.field .input { width: 100%; min-width: 0; }
+.modal__acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
+
+/* 自定义卡片：左上角一个小角标，和内置卡片区分开 */
+.fcard--custom { position: relative; }
+.fcard--custom::after {
+  content: "自定义";
+  position: absolute; top: 8px; right: 8px;
+  padding: 1px 6px; font-size: 9.5px;
+  color: var(--ink); background: var(--tint-accent);
+  border-radius: 999px;
+}
+
+/* ────────────── 弹入收尾强调动画 ──────────────*/
+@keyframes modal-flash {
+  0%, 100% { opacity: 1; }
+  45%      { opacity: .3; }
+}
+
+.modal.is-open .modal__title,
+.modal.is-open .modal__acts > .btn {
+  animation: modal-flash 80ms ease-in-out 50ms 3;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modal.is-open .modal__title,
+  .modal.is-open .modal__acts > .btn { animation: none; }
+}
+/* ==================== ui/editor.css ==================== */
+/* ========================= 卡片编辑器 ========================= */
+
+.modal__box--wide { width: min(940px, calc(100vw - 48px)); }
+
+.cardedit {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 20px;
+  /* 上限 + 自身滚动：参数多的时候不能把模态盒子顶出视口 */
+  max-height: min(62vh, 560px);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+.cardedit__col { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.cardedit__base {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px; min-width: 0;
+}
+.cardedit__base .field > span { font-size: 11.5px; color: var(--text-muted); }
+.cardedit__h {
+  margin: 6px 0 0; font-size: 13px;
+  display: flex; align-items: baseline; gap: 8px;
+}
+.cardedit__hint { font-size: 11px; font-weight: 400; color: var(--text-muted); }
+
+.cardedit__opsdesc {
+  padding: 9px 11px;
+  font-size: 12px; line-height: 1.55;
+  color: var(--ink);
+  background: var(--tint-primary);
+  border-radius: var(--radius-inner);
+}
+
+/* 参数表单：每个参数一行「控件 + 说明」，说明直接写在控件下面 */
+.cardedit__params { display: flex; flex-direction: column; gap: 10px; }
+.pspec {
+  display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: 10px 12px;
+  align-items: start;
+  padding: 10px 12px;
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  min-width: 0;
+}
+.pspec__label { font-size: 12.5px; font-weight: 600; padding-top: 7px; }
+.pspec__label em { display: block; font-style: normal; font-weight: 400;
+  font-size: 10.5px; color: var(--text-muted); margin-top: 2px; }
+.pspec__ctl { min-width: 0; }
+.pspec__ctl .input, .pspec__ctl select { width: 100%; }
+.pspec__desc { grid-column: 1 / -1; font-size: 11.5px; line-height: 1.6; color: var(--text-muted); }
+.pspec__desc code {
+  padding: 1px 4px; font-size: 11px;
+  background: var(--bg-surface); border: 1px solid var(--border); border-radius: 5px;
+}
+.pspec--off { opacity: .45; }
+.pspec__na { font-size: 11.5px; color: var(--text-muted); padding-top: 8px; }
+.pspec textarea.input { min-height: 66px; resize: vertical; font-family: inherit; }
+.pspec__check { display: inline-flex; align-items: center; gap: 7px; padding-top: 7px;
+  font-size: 12.5px; cursor: pointer; }
+
+/* ⚠ 这一条**只给卡片编辑器那个容器**（`#cardIcons`），别写成裸 `.iconpick`：
+   本文件在 `drawer.css` **之后**加载，而预设模态的容器也带 `.iconpick` 类
+   （`#presetIcons.iconpick.iconpick--preset`）。两条规则同特异性 (0,1,0)，
+   于是这里的 `display: flex` 会**悄悄压掉** drawer.css 里给预设写的
+   `display: grid` —— 表现是"设了网格却不生效、格子还是 flex 换行"
+   （踩过：`grid-template-columns` 算出来了，`display` 却还是 flex）。 */
+#cardIcons.iconpick { display: flex; flex-wrap: wrap; gap: 6px; }
+.iconpick__btn {
+  width: 34px; height: 34px; display: grid; place-items: center;
+  color: var(--ink);
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: 10px; cursor: pointer;
+  transition: background .14s, border-color .14s;
+}
+.iconpick__btn svg { width: 16px; height: 16px; }
+.iconpick__btn:hover { background: var(--tint-primary); }
+.iconpick__btn[aria-checked="true"] {
+  background: var(--fill-primary); color: var(--on-fill); border-color: transparent;
+}
+
+/* ------------------------------------------ 图标按钮的 3D 手感（仅 3D 开着时）
+   与卡片上的 .fcard__ico 用同一套：同样的玻璃样式 + 同样的倾斜系数，
+   另外 hover 时**先向上浮起**一点。
+
+   倾斜角不用另算：--nx/--ny 是 bindFollow() 写在 .modal__box 上的
+   （app.js: bindFollow($('#cardModal'), '.modal__box')），自定义属性会继承下来 ——
+   所以"模态盒子里指针怎么动，这些图标就跟着怎么倾"，**不需要任何新 JS**。
+
+   3D 关掉时整段不生效，退回上面那条朴素的 hover（var(--tint-primary)）。 */
+html:not([data-fx="off"]) .iconpick__btn {
+  position: relative;
+  /* 与 cardlib.css 的 .fcard__ico 同一套系数。
+     （cardlib 原先还有个 `--krx`，是死变量、已删 —— rotateX 的倍率被硬编码成 1，
+      因为 --nyE 已经先被 --kyRaw 衰减过了；这里同样不设它。） */
+  --kx: 0.5; --kyRaw: 0.4; --kz: 0.5; --kry: 0.6;
+  --nyE: calc(var(--ny, 0) * var(--kyRaw));
+  --px: calc(var(--nx, 0) * 8px);
+  --py: calc(var(--nyE) * 8px);
+  --pz: calc((var(--nx, 0) + var(--nyE)) * 8px);
+  --rx: calc(var(--nyE) * -11deg);
+  --ry: calc(var(--nx, 0) * 11deg);
+  --lift: 0px;                       /* hover 时抬起来的那一下 */
+  transform-origin: center center;
+  transform:
+    perspective(400px)
+    translate3d(
+      calc(min(0px, var(--px)) + max(0px, var(--px)) * var(--kx)),
+      calc(min(0px, var(--py)) + max(0px, var(--py)) + var(--lift)),
+      calc(min(0px, var(--pz)) + max(0px, var(--pz)) * var(--kz))
+    )
+    rotateX(calc(min(0deg, var(--rx)) + max(0deg, var(--rx))))
+    rotateY(calc(min(0deg, var(--ry)) + max(0deg, var(--ry)) * var(--kry)));
+  transition: transform .16s cubic-bezier(.22, 1, .36, 1),
+              background .14s, border-color .14s, box-shadow .14s;
+}
+/* 浮起 + 倾斜都会让按钮整体挪位。指针若正停在按钮下沿，按钮一挪就脱离 hover，
+   于是 hover→脱离→hover 抖成一团（卡片那边不会：它的 hover 目标是整张卡，够大）。
+   这里把命中区往下、左右各撑开一点抵消：只撑 6px —— .iconpick 的行/列间距就是 6px，
+   正好不吃到相邻按钮。伪元素全透明，只负责接指针。 */
+html:not([data-fx="off"]) .iconpick__btn::after {
+  content: "";
+  position: absolute;
+  inset: 0 -2px -6px -2px;
+}
+html:not([data-fx="off"]) .iconpick__btn:hover {
+  --lift: -3px;                      /* 先向上略微浮起；想更明显就调这个 */
+  background: linear-gradient(.35turn, #fff4, #fff5);
+  border-color: rgba(255, 255, 255, 0.3);
+  box-shadow: 0 0 4px color-mix(in srgb, var(--fill-primary) 50%, transparent);
+  backdrop-filter: blur(2px) saturate(1.2);
+  -webkit-backdrop-filter: blur(2px) saturate(1.2);
+}
+/* 选中态在 hover 时也必须还看得出是选中的：底色留着，玻璃叠在它上面。
+   （卡片那边没有"选中"这个概念，所以这一条是本页面特有的。） */
+html:not([data-fx="off"]) .iconpick__btn[aria-checked="true"]:hover {
+  background: linear-gradient(.35turn, #fff4, #fff5), var(--fill-primary);
+  color: var(--on-fill);
+}
+@media (prefers-reduced-motion: reduce) {
+  html:not([data-fx="off"]) .iconpick__btn,
+  html:not([data-fx="off"]) .iconpick__btn:hover {
+    transform: none;                 /* 不倾、不浮；玻璃与配色照旧 */
+    transition: background .14s, border-color .14s;
+  }
+}
+
+.cmdpreview {
+  margin: 0; padding: 11px 12px;
+  font-size: 11.5px; line-height: 1.6;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: var(--ink);
+  background: var(--bg-surface-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+  white-space: pre-wrap; word-break: break-all;
+  min-height: 62px;
+}
+.cardedit__note { margin: 0; font-size: 11px; line-height: 1.6; color: var(--text-muted); }
+.cardedit__err {
+  padding: 9px 11px; font-size: 12px;
+  color: var(--ink-error);
+  background: var(--error-tint);
+  border-radius: var(--radius-inner);
+  white-space: pre-wrap;
+}
+.cardedit__spacer { flex: 1; }
+.btn--danger { color: var(--ink-error); }
+.btn--danger:hover { background: var(--error-tint); }
+
+@media (max-width: 900px) {
+  .cardedit { grid-template-columns: minmax(0, 1fr); }
+  .cardedit__base { grid-template-columns: minmax(0, 1fr); }
+  .pspec { grid-template-columns: minmax(0, 1fr); }
+  .pspec__label { padding-top: 0; }
+}
+
+/* ============================== 响应 ============================== */
+
+@media (max-width: 1400px) {
+  .metacard { flex-basis: 250px; }
+  .cover { flex-basis: 80px; height: 80px; }
+  .snaps { gap: 16px; }
+  .wave { min-width: 280px; }
+}

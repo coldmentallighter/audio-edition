@@ -298,6 +298,34 @@ html[data-fx="off"] .modal.is-open.is-settled .modal__box {
   transition-property: opacity, translate, scale;
 }
 
+/* ── 释放：让"指针离开"这一次的回正走成过渡，而不是瞬变 ────────────────
+   上面那条把 transform 从过渡列表里拿掉，是为了省**连续跟随**期间的开销：
+   --nx/--ny 每帧都变 → 过渡每帧被重启 → 每帧一次 Layout（实测 +88 → +15）。
+   代价就是指针一离开、变量被摘掉，倾斜会**一帧跳回平整**（实测：逐帧采样
+   computed transform 只有 1 个不同值 = SNAP；fcard/pcard 是 12 个 = 本来就有动画）。
+
+   这一条只在"释放那一次"把 transform 加回列表：那是**单次**变化，不会带回那个开销。
+   `.is-returning` 由 app.js 的 clearFollow() 在摘掉变量**之前**挂上（同一帧内完成，
+   按 CSS Transitions 规范，起不起过渡看的是**变化后**样式里的 transition-property，
+   所以这样挂是有效的），380ms 后摘掉；指针又进来时由 cancelReturning() 立刻摘掉，
+   免得连续跟随又变成"每帧重启过渡"。
+
+   时长/缓动不用在这里写：基础规则里 `transition: … transform .30s
+   cubic-bezier(.22, 1, .36, 1)` 已经给了，这里只把属性名重新加回列表
+   （属性列表与时长列表按位置对应：opacity .16s / translate .30s /
+   scale .30s / transform .30s）。 */
+.modal.is-settled .modal__box.is-returning {
+  transition-property: opacity, translate, scale, transform;
+}
+
+/* ⚠ 别想着用伪元素给 .modal__box 内扩命中区来治"边缘抖动"——试过，不行。
+   加 `::after { inset: -8px }` 之后，内侧 1–5px 那 5 条翻转带确实消失了，
+   但把内外一起扫（-12..14px）会看到**多出 6 条翻转带，落在边缘外 2–7px**
+   （实测）。原因：伪元素是盒子的子节点，**跟着盒子一起被变换** ——
+   内边距自己也会缩进，只是把不稳定带从内侧挪到了外侧。
+   真正的修法在 app.js：这类目标的命中判定改用**布局矩形**（与 transform 无关），
+   见 bindFollow() 的 stableHit 说明。 */
+
 @media (prefers-reduced-motion: reduce) {
   .modal__box {
     translate: none;

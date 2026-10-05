@@ -27,8 +27,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-#: `theme.css` 的位置（仓库根）。**唯一来源**。
-CSS_PATH = Path(__file__).resolve().parent.parent / "theme.css"
+#: `theme.css` 的位置（组件库目录 `ui/`，见 `ui/README.md`）。**唯一来源**。
+CSS_PATH = Path(__file__).resolve().parent.parent / "ui" / "theme.css"
 
 #: 主题 × 模式
 THEMES = ("t1", "t2", "t3")

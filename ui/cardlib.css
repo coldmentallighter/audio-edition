@@ -316,7 +316,6 @@ html[data-fx="off"] #presetSections .pcard:hover .pcard__ico {
   --kyRaw:0.4;      /* Y 原始量衰减，主调这个（下移过多就压小） */
   --kz:   0.5;      /* 正 z 衰减 */
   --kry:  0.6;      /* rotateY 正值衰减 */
-  --krx:  0.6;      /* rotateX 正值衰减（下移造成的俯冲） */
 
   /* 先把 ny 整体缩小，后面 z / rotateX 都吃这个值 */
   --nyE: calc(var(--ny, 0) * var(--kyRaw));
@@ -442,6 +441,21 @@ html[data-fx="off"] #presetSections .pcard:hover .pcard__ico {
 #cardSections .fcard:not(.fcard--new) {
   transition:
     transform .18s cubic-bezier(.22, .61, .36, 1),
+    scale     .18s cubic-bezier(.22, .61, .36, 1),
+    background .14s, border-color .14s, box-shadow .14s;
+}
+
+/* ── 释放：指针离开时把倾斜缓回，与模态同一条缓动 ──────────────────────
+   卡片本来就带 .18s 的 transform 过渡（上面那条），所以**不是**瞬变；
+   这一条只是把"离开那一次"放慢到 .30s + 更强的缓出，让三种跟随效果
+   （模态 / 功能卡片 / 预设卡片）的退出一致。
+   跟随期间仍走 .18s（手感不变）—— `.is-returning` 只在 clearFollow 那一刻挂上，
+   380ms 后由 app.js 摘掉。
+   特异性 (1,3,0) > 下面那条"松手弹回"的 (1,2,0)，所以不依赖文件顺序。 */
+#cardSections .fcard.is-returning:not(.fcard--new),
+#presetSections .pcard.is-returning {
+  transition:
+    transform .30s cubic-bezier(.22, 1, .36, 1),
     scale     .18s cubic-bezier(.22, .61, .36, 1),
     background .14s, border-color .14s, box-shadow .14s;
 }

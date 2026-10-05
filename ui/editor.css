@@ -90,8 +90,8 @@
 html:not([data-fx="off"]) .iconpick__btn {
   position: relative;
   /* 与 cardlib.css 的 .fcard__ico 同一套系数。
-     （cardlib 里那个 --krx 其实是死变量 —— rotateX 的倍率被硬编码成 1，
-      因为 --nyE 已经先被 --kyRaw 衰减过了；这里不抄它。） */
+     （cardlib 原先还有个 `--krx`，是死变量、已删 —— rotateX 的倍率被硬编码成 1，
+      因为 --nyE 已经先被 --kyRaw 衰减过了；这里同样不设它。） */
   --kx: 0.5; --kyRaw: 0.4; --kz: 0.5; --kry: 0.6;
   --nyE: calc(var(--ny, 0) * var(--kyRaw));
   --px: calc(var(--nx, 0) * 8px);

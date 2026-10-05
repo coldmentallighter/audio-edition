@@ -138,8 +138,21 @@ OPS: dict[str, dict[str, Any]] = {
             {"key": "lra", "label": "响度范围", "type": "float",
              "default": 11, "min": 1, "max": 50,
              "desc": "单位 LU，允许的动态范围。越大保留越多起伏，越小压得越平。"},
+            # ⚠ 这两个参数 handler **一直在读**（`keepTags` / `keepCover`，
+            # 缺省 True），但 spec 里从来没登记过 —— 于是"卡片上改不了、
+            # 文档里看不到、预览也不显示"。登记之后有两件事才成立：
+            #   ① 用户能显式要求"标准化时别带封面"
+            #   ② 预览里会显出 `-map 0:v?`（否则用户以为封面一定会丢）
+            {"key": "keepTags", "label": "保留标签", "type": "bool", "default": True,
+             "desc": "把源文件的标签原样带过去（`-map_metadata 0`）。"
+                     "标准化不改容器，关掉它通常没有理由。"},
+            {"key": "keepCover", "label": "保留封面", "type": "bool", "default": True,
+             "desc": "把内嵌封面原样带过去。**容器装不下时会明确告诉你**"
+                     "（WAV / AIFF / OGG / Opus / WMA 不支持内嵌封面），"
+                     "那种情况下封面不带过来、音频与标签不受影响。"},
         ],
-        "preview": "ffmpeg -i <文件> -af loudnorm=I={targetLufs}:TP={truePeak}:LRA={lra}:linear=true <输出>",
+        "preview": "ffmpeg -i <文件> -af loudnorm=I={targetLufs}:TP={truePeak}:LRA={lra}:linear=true"
+                   " -map_metadata 0 -map 0:a|0:v? <输出>",
     },
     "rename": {
         "task": "rename",

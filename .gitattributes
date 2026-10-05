@@ -23,3 +23,8 @@
 *.mp3 binary
 *.wav binary
 *.zip binary
+
+# ui-kit/audioedition-ui.css 是 tools/build_ui_kit.py 的**生成物**：
+# 标成 generated，GitHub 的 diff 里会折叠掉，免得每次动样式都刷一整屏
+# （内容照常提交 —— 交付形态要能直接拿走，不能要求别人先跑脚本）。
+ui-kit/audioedition-ui.css linguist-generated=true

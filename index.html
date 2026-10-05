@@ -4,19 +4,20 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AudioEdition · 基于 ffmpeg/flac 的音频工具箱</title>
-<link rel="stylesheet" href="theme.css">
-<!-- app.css 按原分节横幅拆成 9 个文件。**顺序不能改**：
+<!-- 组件库在 ui/（用法见 ui/README.md，可视化样例见 ui/gallery.html）。
+     **这 10 个文件是一个整体，顺序不能改** —— 层叠结果依赖它：
      层叠结果与拆分前逐个字节等价（见 布局规格.md「样式表的拆分」）。
-     校验方法：按下面顺序拼接应等于 git show HEAD:app.css -->
-<link rel="stylesheet" href="css/base.css">
-<link rel="stylesheet" href="css/common.css">
-<link rel="stylesheet" href="css/header.css">
-<link rel="stylesheet" href="css/layout.css">
-<link rel="stylesheet" href="css/filecard.css">
-<link rel="stylesheet" href="css/drawer.css">
-<link rel="stylesheet" href="css/cardlib.css">
-<link rel="stylesheet" href="css/overlays.css">
-<link rel="stylesheet" href="css/editor.css">
+     校验：python tests/ui_check.py 会核对这里的顺序与 ui/ 下的文件集合 -->
+<link rel="stylesheet" href="ui/theme.css">
+<link rel="stylesheet" href="ui/base.css">
+<link rel="stylesheet" href="ui/common.css">
+<link rel="stylesheet" href="ui/header.css">
+<link rel="stylesheet" href="ui/layout.css">
+<link rel="stylesheet" href="ui/filecard.css">
+<link rel="stylesheet" href="ui/drawer.css">
+<link rel="stylesheet" href="ui/cardlib.css">
+<link rel="stylesheet" href="ui/overlays.css">
+<link rel="stylesheet" href="ui/editor.css">
 </head>
 <body>
 
@@ -186,7 +187,7 @@
      body 的静态位置为参照，而不是视口，面板会推不动。 -->
 <div class="dock" id="dock">
 
-  <div class="drawer" id="drawer" data-open="false" style="--drawer-h:0px">
+  <div class="drawer" id="drawer" data-open="false">
 
     <!-- 顶端：把手 + 5 个卡片快照（收起时唯一可见部分） -->
     <div class="drawer__bar">

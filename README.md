@@ -36,8 +36,9 @@ cd audio-edition
 
 ### 1. 前端零构建、零依赖
 
-`index.html` + `css/*.css` + `app.js` + `api.js` + `theme.css`，原生 HTML/CSS/JS，
+`index.html` + `ui/*.css` + `app.js` + `api.js`，原生 HTML/CSS/JS，
 **没有 npm、没有打包器、没有框架**。改完直接刷新页面就生效。
+样式集中在 `ui/`（自带用法文档与组件画廊），见 `ui/README.md`。
 选这条路的理由：本地工具的寿命通常比前端工具链长，不需要为了一个滑块引入 200MB 的 `node_modules`。
 
 代价是所有交互（抽屉三档吸附、拖拽排序、右键菜单、波形绘制）都手写 —— 见"技术栈"一节。
@@ -446,17 +447,26 @@ audio-edition/
 ├── index.html                页面骨架（无构建，直接引用下面几个文件）
 ├── app.js                    视图与交互（抽屉、波形、播放器、卡片编辑器…）
 ├── api.js                    API 封装、拖拽导入、右键菜单、轮询
-├── theme.css                 6 套主题 × 21 个设计令牌
-├── css/                      样式表，按原分节横幅拆分（**顺序不能改**）
-│   ├── base.css              契约 + 重置 + 滚动条
-│   ├── common.css            通用件：按钮 / 输入 / 徽章 / 进度
-│   ├── header.css            顶栏 + 执行链 + 音量
-│   ├── layout.css            侧栏 + 工作区
-│   ├── filecard.css          文件卡片：波形 / 传输 / 元数据 / 状态
-│   ├── drawer.css            抽屉 + 快照条
-│   ├── cardlib.css           卡片库：基础 / 光标跟随 / 点击反馈 / 对勾
-│   ├── overlays.css          拖拽导入 / 上传进度 / 右键菜单 / 通知 / 模态
-│   └── editor.css            卡片编辑器 + 响应式
+├── ui/                        样式表的**源**（应用直接引这 10 个文件）
+│   ├── theme.css              令牌层：6 套主题 × 21 个设计令牌
+│   ├── base.css               契约 + 重置 + 滚动条 + 视图过渡
+│   ├── common.css             通用件：按钮 / 输入 / 徽章 / 主题色点
+│   ├── header.css             顶栏 + 执行链 + 音量 + 分段开关 + 空状态
+│   ├── layout.css             侧栏 + 工作区 + 选择条 / 批量栏 + 任务与日志
+│   ├── filecard.css           文件卡片：波形 / 传输 / 元数据 / 封面 / 状态列
+│   ├── drawer.css             抽屉 + 快照条 + 卡片库网格 + 预设与链编辑
+│   ├── cardlib.css            卡片库：基础 / 光标跟随 / 点击反馈 / 对勾 + 搜索
+│   ├── overlays.css           拖拽导入 / 上传进度 / 右键菜单 / 通知 / 模态
+│   └── editor.css             卡片编辑器 + 响应式
+│                              ⚠ 这 10 个是**一个整体、顺序不能改**（层叠结果依赖它）
+│
+├── ui-kit/                    **组件库交付形态**（可整个拿走）
+│   ├── audioedition-ui.css    单文件产物：上面 10 个按加载顺序拼接（生成物，勿手改）
+│   ├── README.md              用法文档：令牌契约 / 组件清单 / 改动须知 / 踩过的坑
+│   └── gallery.html           组件画廊（全组件 × 6 套主题，引的就是那个单文件）
+│
+├── tools/
+│   └── build_ui_kit.py        把 ui/ 拼成 ui-kit/ 的单文件（顺序的唯一事实来源）
 │
 ├── backend/
 │   ├── app.py                应用骨架：生命周期 / CORS / 路由装配 / 静态挂载 / 入口
@@ -522,10 +532,12 @@ python tests/chain_zip_check.py     # 31 项：打包窗口/多产物/命名/窗
 python tests/loudness_display_check.py   # 15 项：卡片那行「Loudness」的显示（抠出 app.js 那段表达式交给 node 真跑）
 python tests/waveform_check.py      #  36 项：波形 PNG 逐像素验证
 python tests/theme_check.py         #  93 项：6 套主题对比度与可见度
+python tests/ui_check.py            #  26 项：加载顺序护栏 + 打包产物与源一致 + 未定义令牌审计
 python tests/axis_a_check.py        #  19 项：位深 / 重命名零填充 / 4K 波形 / 每个 op 参数透传
 python tests/snapshot_drag_real.py  #  12 项：真实拖拽（CDP）
 python tests/halftone_check.py      #  27 项：卡片 hover 的 AM 网点（CDP 截图 + 周期/点径）
 python tests/reveal_cmd_check.py    #  30 项：「显示所在目录」拼出的命令行形式（不弹窗）
+python tests/browser_modal_follow_probe.py  #  23 项：模态 3D 跟随的边缘抖动 + 释放动画（CDP，真页面）
 python tests/palette_regen.py       #  改色板时用来推导新令牌
 
 # UI 演示版自检（自己起静态服务，不需要 8765，也不会碰真实文件）

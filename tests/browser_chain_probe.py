@@ -161,16 +161,20 @@ PROBE = r"""
     out.blockedCountAfterUndo = qa('#cardSections .fcard--blocked').length;
     out.chainLenAfterUndo = chain.length;
 
-    // ---------- 3b) gives='none' 的只读分析之后**不能**置灰 ----------
-    // 回归钉子：`gives='none'`（响度报告 / 响度总览图 / 完整性校验 / 重新探测）
-    // 的字面意思是"没交出产物"，真正的意思是"**没动那个音频文件**"——
-    // 后面的卡照旧读原文件就行。前端 `availabilityOf` 的终态判定差一点把
-    // `none` 当成"没有任何卡接得住"（只有 `zip` 显式收 `none`），
-    // 现象是「响度分析报告」之后除打包以外**全部置灰**，正常用法被前端堵死。
+    // ---------- 3b) 没产出新文件（produce≠derived）的步骤之后**不能**置灰 ----------
+    // 回归钉子：只读分析（响度报告 / 完整性校验 / 重新探测）与旁路产物
+    // （波形图 / 响度图 / 打包）**根本没动那个音频文件** ——
+    // 后面的卡照旧读原文件就行，不该被置灰。
+    // 前端 `availabilityOf` 的终态判定差一点把 `gives='none'` 当成
+    // "没有任何卡接得住"（只有 `zip` 显式收 `none`），现象是
+    // 「响度分析报告」之后除打包以外**全部置灰**，正常用法被前端堵死。
     chain.length = 0; renderChain(); await wait(120);
     const noneCards = (typeof CARDS !== 'undefined' ? CARDS : [])
-        .filter(c => c.op === 'loudness-report' || c.op === 'loudness'
-                  || c.op === 'verify' || c.op === 'probe');
+        .filter(c => {
+          const sp = OPS_CATALOG && OPS_CATALOG[c.op];
+          // 按 `produce` 挑（不再按 `gives`）——见下面断言的注释
+          return sp && sp.produce !== 'derived' && c.op !== 'zip';
+        });
     out.noneCardsFound = noneCards.length;
     out.noneTailResults = [];
     for (const nc of noneCards) {
@@ -303,15 +307,25 @@ PROBE = r"""
     out.opsList = Object.keys(OPS_CATALOG || {});
     out.parityChecked = 0;
     out.parityBad = [];
+    out.opsWithoutCard = [];
     {
       const reportTail = (typeof CARDS !== 'undefined' ? CARDS : [])
         .find(c => c.op === 'loudness-report');
       for (const op of out.opsList) {
         for (const tailSpec of out.opsList) {
-          // 用页面自己的链来驱动：清空 → 加入能产生该 op 的卡
+          // 用页面自己的链来驱动：清空 → 加入能产生该 op 的卡。
+          // ⚠ 卡片库里**可能没有**某个 op 的卡（「响度总览图」那张被删过，
+          // `op: loudness` 保留但抽屉里没入口），这时这一组**跳不过去**：
+          // 记下来单独断言"哪几个 op 没有卡"，而不是让"覆盖数"悄悄变少 ——
+          // 否则覆盖率下滑会被伪装成"对账通过"。
           const tc = (typeof CARDS !== 'undefined' ? CARDS : [])
             .find(c => c.op === tailSpec);
-          if (!tc) continue;
+          if (!tc) {
+            if (!out.opsWithoutCard.includes(tailSpec)) {
+              out.opsWithoutCard.push(tailSpec);
+            }
+            continue;
+          }
           chain.length = 0;
           chain.push({ cardId: tc.id || '', name: tc.name, op: tailSpec,
                        params: JSON.parse(JSON.stringify(tc.params || {})),
@@ -544,20 +558,33 @@ async def run_all() -> None:
               (out["selectableAfterZip"], out["totalCards"]))
         check("链尾是压缩包时，提示里说清它不会被递下去",
               "压缩包" in (out["zipTailHint"] or ""), out["zipTailHint"])
-        check("链上提示区真的显示了这条提示",
-              "压缩包" in (out["notesTextAfterZip"] or ""), out["notesTextAfterZip"])
+        # ⚠ 只断言"**这一格**有提示"，不要断言提示里出现某个词。
+        # 原来断言的是 `"压缩包" in notesText`，而那条支路的文案 2026-10 改过：
+        # 现在 `打包 ZIP` 之后**不再置灰**（`consumes=False` → 交给 `_hands_something_off`
+        # 处理），链尾提示说的是"它会作用在原文件上"而不是"交出的是压缩包"。
+        # 钉具体词会把"文案调整"误报成"提示没了"。
+        check("链上提示区真的显示了这条提示（非空）",
+              bool((out["notesTextAfterZip"] or "").strip()),
+              out["notesTextAfterZip"])
+        check("提示里点明了是第几步",
+              "第 1 步" in (out["notesTextAfterZip"] or ""),
+              out["notesTextAfterZip"])
         check("删掉 ZIP 之后状态与加之前一致（都不置灰）",
               out["blockedCountAfterUndo"] == 0, out["blockedCountAfterUndo"])
 
         print()
-        print("--- 只读分析（gives=none）之后不许整片置灰 ---")
+        print("--- 只读分析（produce=none/sidecar）之后不许整片置灰 ---")
         # 先自证跑的是新代码：否则下面几条失败会把"缓存"误报成"逻辑坏了"
         check("页面执行的是含本修复的 app.js（不是缓存里的旧版）",
               out["liveFnHasNoHandoff"] is True, out["liveFnHasNoHandoff"])
-        print("        [诊断] noneDiag =", json.dumps(out.get("noneDiag"),
-                                                     ensure_ascii=False))
-        check("页面上找得到 gives='none' 的代表卡",
-              out["noneCardsFound"] >= 4, out["noneCardsFound"])
+        # ⚠ 这里原来按 `gives == 'none'` 挑代表卡，要求 ≥4 张。
+        # 2026-10 的两处变化让它不再成立：
+        #   ① 「响度总览图」那张卡被删了（`op: loudness` 保留，但抽屉里没入口）
+        #   ② 一批只读 op 的 `gives` 从 `none` 改成了 `audio`（表意就是"音频还在"）
+        # 判据改成**按 `produce` 挑**才对得上现在的契约：
+        # 真正的回归点是"**没产出新文件**的步骤之后，卡片照旧可选"。
+        check("页面上找得到只读/旁路（produce≠derived）的代表卡",
+              out["noneCardsFound"] >= 3, out["noneCardsFound"])
         for r in out["noneTailResults"]:
             check(f"「{r['card']}」之后没有卡被置灰",
                   r["blocked"] == 0,
@@ -572,9 +599,18 @@ async def run_all() -> None:
         # 前端 `availabilityOf` 是体验层，两者判据必须同源。分叉过一次的表现是
         # "后端说能选、前端把卡置灰了"，而当时的断言只覆盖后端 + 只覆盖
         # "zip 之后全灰"，于是 240 组里十几组不一致却全绿。
-        check("对账覆盖了全部 op×op 组合",
-              out["parityChecked"] >= len(out["opsList"]) ** 2,
-              f"checked={out['parityChecked']}")
+        # 覆盖数按**有卡的 op** 算（没有卡的 op 单独断言，见下）
+        with_cards = len([o for o in out["opsList"]
+                          if o not in (out.get("opsWithoutCard") or [])])
+        check(f"对账覆盖了全部「有卡的 op」组合（{with_cards}²）",
+              out["parityChecked"] >= with_cards ** 2,
+              f"checked={out['parityChecked']} 有卡的 op={with_cards}")
+        # 没有卡的 op 必须是**已知那几个**（不是随便少几张就算过）。
+        # 当前：`loudness`（「响度总览图」那张卡被删了，op 保留给链上引用）。
+        # 这个名单变了就要来这里改 —— 那正是"卡片被删/被加"时该被看见的地方。
+        missing = sorted(out.get("opsWithoutCard") or [])
+        check("没有内置卡的 op 恰好是已知的那些（不是悄悄少覆盖）",
+              missing == ["loudness"], missing)
         check("前端可用性与后端判据**逐组一致**",
               not out["parityBad"], (out["parityBad"] or [])[:6])
 

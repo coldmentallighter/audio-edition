@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="t1">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AudioEdition UI Kit · 组件画廊</title>
+
+<!-- 画廊是**打包产物**的一部分，所以它引的是打包好的单文件（1 个请求），
+     而不是 `../ui/` 下那 10 个源文件 —— 这样这个文件夹可以整个拿走直接用。
+     单文件是 `tools/build_ui_kit.py` 按 `ui/` 的加载顺序拼出来的，
+     `tests/ui_check.py` 会逐字节校验它与源一致（源改了忘打包会红）。 -->
+<link rel="stylesheet" href="audioedition-ui.css">
+
+<!-- ============================================================================
+     gallery-only 样式。**不算组件库的一部分** —— 只为了让「本来就是 fixed 的浮层」
+     能钉进演示框里看清楚。组件库本身一个字节都不改。
+     ============================================================================ -->
+<style>
+/* 应用骨架是 1440 设计宽（body 有 min-width:1240px）；画廊要在窄窗口里也能看，
+   所以这里放开它。这只是画廊的阅读姿势，不是对组件库的修改。 */
+body { min-width: 0; display: block; padding: 0 0 80px; }
+
+.g-head {
+  position: sticky; top: 0; z-index: 300;
+  display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  padding: 14px 22px;
+  background: var(--bg-surface);
+  border-bottom: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+}
+.g-head h1 { margin: 0; font-size: 18px; }
+.g-head__sub { margin: 0; font-size: 12px; color: var(--text-muted); }
+.g-head__spacer { flex: 1; }
+
+.g-wrap { max-width: 1180px; margin: 0 auto; padding: 0 22px; }
+
+.g-section { margin-top: 34px; }
+.g-section > h2 {
+  margin: 0 0 4px; padding-bottom: 7px; font-size: 15px;
+  border-bottom: 1px solid var(--border);
+}
+.g-section > p.g-note {
+  margin: 8px 0 0; font-size: 12px; line-height: 1.75; color: var(--text-muted);
+}
+.g-section > p.g-note code {
+  padding: 1px 5px; border-radius: 5px; background: var(--bg-surface-alt);
+  border: 1px solid var(--border); font-size: 11.5px;
+}
+
+.demo { margin-top: 18px; }
+.demo__title { margin: 0 0 3px; font-size: 13px; font-weight: 700; }
+.demo__desc { margin: 0 0 9px; font-size: 12px; line-height: 1.7; color: var(--text-muted); }
+.demo__desc code {
+  padding: 1px 5px; border-radius: 5px; background: var(--bg-surface-alt);
+  border: 1px solid var(--border); font-size: 11.5px;
+}
+
+/* 演示台：给浮层一个定位参照 */
+.demo__stage {
+  position: relative; overflow: hidden;
+  padding: 18px;
+  background: var(--bg-app);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-card);
+}
+.demo__stage--pad0 { padding: 0; }
+.demo__stage--h400 { height: 400px; }
+.demo__stage--h260 { height: 260px; }
+.demo__stage--h200 { height: 200px; }
+.demo__stage--center { display: grid; place-items: center; }
+
+/* 行内一组并排演示 */
+.demo__row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.demo__row--col { flex-direction: column; align-items: stretch; }
+
+/* ---- 把 fixed 浮层钉进演示台（仅画廊） ---- */
+.demo__stage > .modal,
+.demo__stage > .notice,
+.demo__stage > .uploadbar,
+.demo__stage > .ctxmenu,
+.demo__stage > .dropzone,
+.demo__stage > .drawer,
+.demo__stage > .drawer-backdrop { position: absolute; }
+.demo__stage > .uploadbar { right: 14px; bottom: 14px; }
+.demo__stage > .ctxmenu { left: 14px; top: 14px; }
+.demo__stage > .notice { right: 14px; top: 14px; }
+/* 抽屉：真实里是贴视口下边缘的，演示台里给它一个固定高度 */
+.demo__stage > .drawer { inset: auto 14px 0 14px; height: 370px; }
+
+/* 代码块（由脚本从真实 DOM 里抄出来，保证文档与实物一致） */
+.demo__code {
+  margin: 10px 0 0; padding: 11px 13px; max-height: 260px; overflow: auto;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px; line-height: 1.65;
+  color: var(--ink); background: var(--bg-surface-alt);
+  border: 1px solid var(--border); border-radius: var(--radius-inner);
+  white-space: pre; tab-size: 2;
+}
+
+/* 令牌色板 */
+.sw-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: 10px; }
+.sw {
+  display: flex; align-items: center; gap: 9px;
+  padding: 8px 10px;
+  background: var(--bg-surface); border: 1px solid var(--border);
+  border-radius: var(--radius-inner);
+}
+.sw__chip {
+  flex: 0 0 auto; width: 26px; height: 26px; border-radius: 7px;
+  box-shadow: inset 0 0 0 1px var(--border-strong);
+  /* 棋盘底：半透明令牌（border / text-muted 这类）才看得出是透明的 */
+  background-image:
+    linear-gradient(45deg, var(--bg-surface-alt) 25%, transparent 25% 75%, var(--bg-surface-alt) 75%),
+    linear-gradient(45deg, var(--bg-surface-alt) 25%, transparent 25% 75%, var(--bg-surface-alt) 75%);
+  background-size: 10px 10px; background-position: 0 0, 5px 5px;
+}
+.sw__chip > i { display: block; width: 100%; height: 100%; border-radius: 7px; }
+.sw__k { font-size: 11.5px; font-weight: 600; }
+.sw__v { font-size: 10.5px; color: var(--text-muted); word-break: break-all; }
+
+/* 主题并排 */
+.g-themes { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; margin-top: 14px; }
+.g-themes figure { margin: 0; }
+.g-themes iframe {
+  display: block; width: 100%; height: 340px;
+  background: var(--bg-app);
+  border: 1px solid var(--border); border-radius: var(--radius-inner);
+}
+.g-themes figcaption { margin-top: 6px; font-size: 12px; color: var(--text-muted); }
+
+/* 状态钩子对照表 */
+.hooks { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 12px; }
+.hooks th, .hooks td {
+  padding: 7px 10px; text-align: left; vertical-align: top;
+  border-bottom: 1px solid var(--border);
+}
+.hooks th { font-size: 11.5px; color: var(--text-muted); font-weight: 700; }
+.hooks td code, .hooks th code {
+  padding: 1px 5px; border-radius: 5px; background: var(--bg-surface-alt);
+  border: 1px solid var(--border); font-size: 11px;
+}
+
+/* bare 模式：给「6 套主题并排」的 iframe 用，只留紧凑面板 */
+html[data-bare="1"] .g-head,
+html[data-bare="1"] .g-section:not([data-bare-keep]),
+html[data-bare="1"] .g-bare-hide { display: none; }
+html[data-bare="1"] body { padding: 0; }
+html[data-bare="1"] .g-wrap { max-width: none; padding: 12px; }
+</style>
+</head>
+<body>
+
+<header class="g-head g-bare-hide">
+  <div>
+    <h1>AudioEdition UI 组件库</h1>
+    <p class="g-head__sub">全组件 × 6 套主题 · 用法见 <code>README.md</code></p>
+  </div>
+  <div class="g-head__spacer"></div>
+
+  <div class="switchgroup" role="group" aria-label="配色类型">
+    <button class="seg" data-set-theme="t1" aria-pressed="true"><span class="dot dot--t1"></span>蓝橙</button>
+    <button class="seg" data-set-theme="t2" aria-pressed="false"><span class="dot dot--t2"></span>绿橙</button>
+    <button class="seg" data-set-theme="t3" aria-pressed="false"><span class="dot dot--t3"></span>紫珊瑚</button>
+  </div>
+
+  <button class="btn" id="gMode" type="button">浅色 / 深色</button>
+  <button class="btn" id="gFx" type="button" aria-pressed="true" title="关掉后不给 hover 图标叠毛玻璃">3D 跟随：开</button>
+  <button class="btn" id="gFollow" type="button" aria-pressed="true"
+          title="画廊没有 app.js 的 bindFollow()。打开它就用同样的公式模拟指针跟随，否则网点与视差看不到">模拟跟随：开</button>
+</header>
+
+<div class="g-wrap">
+
+<!-- ============================== 1. 令牌 ============================== -->
+<section class="g-section" id="sec-tokens">
+  <h2>1. 令牌层（<code>theme.css</code>）</h2>
+  <p class="g-note">
+    每套主题**恰好 21 个**令牌（<code>tests/theme_check.py</code> 既查缺少也查多余）。
+    下面的色块是从**当前生效的** <code>:root</code> 上现读的，切换主题会跟着变。<br>
+    配对契约：<code>--bg-*</code> / <code>--tint-*</code> 配 <code>--ink</code>；
+    <code>--fill-*</code> 配 <code>--on-fill</code>。深色模式下 <code>--fill-*</code> 会反转成浅底，
+    所以 <code>--on-fill</code> 是**近黑色** —— 混用就是浅字压浅底。
+  </p>
+  <div class="sw-grid" id="swatches"></div>
+</section>
+
+<!-- ============================== 2. 基础件 ============================== -->
+<section class="g-section">
+  <h2>2. 基础件（<code>common.css</code>）</h2>
+
+  <div class="demo">
+    <h3 class="demo__title">按钮 <code>.btn</code></h3>
+    <p class="demo__desc">
+      修饰符 <code>--primary</code> <code>--danger</code> <code>--ghost</code>
+      <code>--sm</code> <code>--xs</code> <code>--icon</code>。
+      <b>注意</b>：<code>.btn--danger</code> 的最终外观由 <code>editor.css</code>（最后加载）决定，
+      见 README §2。
+    </p>
+    <div class="demo__stage demo__stage--center" data-code>
+      <div class="demo__row">
+        <button class="btn">默认</button>
+        <button class="btn btn--primary">主操作</button>
+        <button class="btn btn--danger">删除</button>
+        <button class="btn btn--ghost">无底色</button>
+        <button class="btn btn--sm">小</button>
+        <button class="btn btn--xs">更小</button>
+        <button class="btn btn--sm btn--danger">小·危险</button>
+        <button class="btn" disabled>禁用</button>
+        <button class="btn btn--icon" aria-label="设置">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+            <circle cx="12" cy="12" r="3"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">输入框 <code>.input</code></h3>
+    <p class="demo__desc">
+      <code>.input--search</code> 会吃掉全局焦点圈，改用描边 + 内阴影表达聚焦。
+    </p>
+    <div class="demo__stage" data-code>
+      <div class="demo__row">
+        <input class="input" placeholder="普通输入">
+        <input class="input input--search" type="search" placeholder="搜索卡片" style="width:240px">
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">徽章 <code>.badge</code> · 主题色点 <code>.dot</code></h3>
+    <p class="demo__desc">
+      色点的颜色是**硬编码的**（它要在别的主题生效时也显示各家色板），
+      所以改 <code>theme.css</code> 后这里要手工跟 —— <code>tests/browser_palette_probe.js</code> 盯着这条。
+    </p>
+    <div class="demo__stage demo__stage--center" data-code>
+      <div class="demo__row">
+        <span class="badge">待处理</span>
+        <span class="badge badge--run">运行中</span>
+        <span class="badge badge--done">完成</span>
+        <span class="badge badge--failed">失败</span>
+        <span class="badge badge--idle">空闲</span>
+        <span class="dot dot--t1"></span>
+        <span class="dot dot--t2"></span>
+        <span class="dot dot--t3"></span>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">复选框 <code>.check</code> · 进度条 <code>.progress</code> · 分段开关 <code>.seg</code></h3>
+    <p class="demo__desc">
+      勾是 <code>::after</code> 画的，结构固定为 <code>input + span</code>。
+      分段开关的选中态走 <code>aria-pressed</code>，<b>不要自造 <code>.is-active</code></b>。
+      进度条宽度写在 <code>&lt;i&gt;</code> 的行内样式上。
+    </p>
+    <div class="demo__stage" data-code>
+      <div class="demo__row">
+        <label class="check"><input type="checkbox" checked><span></span></label>
+        <label class="check"><input type="checkbox"><span></span></label>
+        <div class="progress" style="width:200px;margin:0"><i style="width:42%"></i></div>
+        <div class="switchgroup">
+          <button class="seg" aria-pressed="true">串行</button>
+          <button class="seg" aria-pressed="false">并行</button>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">键值对 <code>.kv</code> · 空状态 <code>.empty</code></h3>
+    <p class="demo__desc"><code>.empty--sm</code> 是给侧栏窄栏用的紧凑版。</p>
+    <div class="demo__stage" data-code>
+      <div class="demo__row" style="align-items:flex-start">
+        <div class="kv"><span class="kv__k">时长</span><span class="kv__v">3:42</span></div>
+        <div class="kv"><span class="kv__k">采样率</span><span class="kv__v">48 kHz</span></div>
+        <div class="kv"><span class="kv__k">位深</span><span class="kv__v">24 bit</span></div>
+      </div>
+      <div class="demo__row" style="margin-top:16px">
+        <div class="empty" style="flex:1">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/>
+          </svg>
+          <strong>还没有文件</strong>
+          <span>把音频拖到这里，或点上面的导入</span>
+        </div>
+        <div class="empty empty--sm" style="width:200px">
+          <strong>队列为空</strong>
+          <span>提交任务后在这里查看</span>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+</section>
+
+<!-- ============================== 3. 布局骨架 ============================== -->
+<section class="g-section">
+  <h2>3. 布局骨架（<code>layout.css</code>）</h2>
+  <p class="g-note">
+    这些是应用外壳的一部分，通常不单独复用。
+    <code>.pane__body</code> / <code>.filelist</code> 是**已登记的滚动容器**
+    （<code>scrollbar-width</code> 不继承，新增滚动容器必须加进 <code>base.css</code> 那个列表）。
+  </p>
+
+  <div class="demo">
+    <h3 class="demo__title">选择条 <code>.selbar</code> · 批量栏 <code>.bulkbar</code></h3>
+    <p class="demo__desc">
+      批量栏是**强色块**，所以里面的 <code>.btn--sm</code> 有一套作用域覆盖
+      （<code>layout.css</code>）—— 整条栏是 <code>--fill-primary</code>，
+      普通按钮的默认底在上面既突兀又读不清。
+    </p>
+    <div class="demo__stage" data-code>
+      <div class="selbar">
+        <label class="check" title="全选 / 取消全选"><input type="checkbox" checked><span></span></label>
+        <span class="selbar__label">全选</span>
+        <button class="btn btn--xs btn--ghost">反选</button>
+        <span class="selbar__spacer"></span>
+        <span class="selbar__count">共 12 个文件</span>
+      </div>
+      <div class="bulkbar" style="margin-top:14px">
+        <strong>已选 3 个文件</strong>
+        <div class="bulkbar__acts">
+          <button class="btn btn--sm">批量转换</button>
+          <button class="btn btn--sm">批量改标签</button>
+          <button class="btn btn--sm">响度标准化</button>
+          <button class="btn btn--sm btn--danger">删除</button>
+          <button class="btn btn--sm btn--ghost">取消选择</button>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">任务项 <code>.task</code> · 日志行 <code>.log</code></h3>
+    <p class="demo__desc">
+      任务三态：默认 / <code>--running</code>（左侧条换第二色）/ <code>--failed</code>（错误软底）。
+      失败任务会多一条 <code>.task__err</code>（等宽、可断行）。
+    </p>
+    <div class="demo__stage" data-code>
+      <div class="task">
+        <div class="task__top"><span class="task__name">转 FLAC · 01.wav</span><span class="badge">排队中</span></div>
+      </div>
+      <div class="task task--running">
+        <div class="task__top"><span class="task__name">响度标准化 · 02.flac</span><span class="badge badge--run">运行中</span></div>
+        <div class="task__meta">耗时 00:12 · 第一遍 loudnorm</div>
+        <div class="progress"><i style="width:64%"></i></div>
+      </div>
+      <div class="task task--failed">
+        <div class="task__top"><span class="task__name">嵌封面 · 03.mp3</span><span class="badge badge--failed">失败</span></div>
+        <div class="task__err">ffmpeg exited 1: Unknown encoder 'libopus'</div>
+        <div class="task__out">
+          <a class="btn btn--xs" href="#">打开</a>
+          <a class="btn btn--xs btn--ghost" href="#">下载</a>
+        </div>
+      </div>
+      <div style="margin-top:16px">
+        <div class="log"><span class="log__t">12:01:03</span><span class="log__m">队列已启动，2 个 worker</span></div>
+        <div class="log log--ok"><span class="log__t">12:01:07</span><span class="log__m">转 FLAC 完成 → uploads/01.flac</span></div>
+        <div class="log log--err"><span class="log__t">12:01:09</span><span class="log__m">嵌封面失败：未找到可用的编码器</span></div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+</section>
+
+<!-- ============================== 4. 顶栏 ============================== -->
+<section class="g-section">
+  <h2>4. 顶栏（<code>header.css</code>）</h2>
+  <p class="g-note">
+    <code>#chainMode .seg</code> 有一条**按 ID 收窄**的尺寸覆盖（顶栏只有 <code>--header-h</code> 高）。
+    <code>#fxToggle[aria-pressed="false"]</code> 会画一道斜杠表示动效已关。
+  </p>
+
+  <div class="demo">
+    <h3 class="demo__title">完整顶栏</h3>
+    <p class="demo__desc">
+      链标签（<code>.chain__item</code>）与音量滑块都在这里。
+      音量已填充部分靠 <code>--vol-pct</code> 画在轨道背景上（原生 range 没法直接给「已填充」上色），
+      而且必须用 <code>--ink</code> 而不是 <code>--fill-primary</code> —— 后者与链栏底色亮度几乎相同（实测 1.00）。
+    </p>
+    <div class="demo__stage demo__stage--pad0" data-code>
+      <header class="header" style="height:auto;padding:12px 16px;flex-wrap:wrap;gap:10px">
+        <div class="brand">
+          <div class="brand__mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+              <path d="M4 14v-4 M8 16V8 M12 20V4 M16 16V8 M20 14v-4"/>
+            </svg>
+          </div>
+          <div class="brand__text">
+            <h1 class="brand__title">AudioEdition</h1>
+            <p class="brand__sub">基于 ffmpeg/flac 的音频工具箱</p>
+          </div>
+        </div>
+
+        <div class="chainbar">
+          <span class="chainbar__label">执行链</span>
+          <div class="chain">
+            <span class="chain__item">转 FLAC<button title="移除" aria-label="移除">×</button></span>
+            <span class="chain__arrow">›</span>
+            <span class="chain__item">响度标准化<button title="移除" aria-label="移除">×</button></span>
+          </div>
+          <div class="switchgroup" id="chainMode" role="group" aria-label="执行链模式">
+            <button class="seg" aria-pressed="false">串行</button>
+            <button class="seg" aria-pressed="true">并行</button>
+          </div>
+          <div class="chainbar__acts">
+            <button class="btn btn--xs btn--run">
+              <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
+              执行链
+            </button>
+            <button class="btn btn--xs">保存预设</button>
+          </div>
+          <div class="chainbar__vol">
+            <button class="vol__btn" aria-pressed="false" aria-label="静音">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+                <path d="M4 9.5h3.2L11 6v12l-3.8-3.5H4z"/><path d="M15 9.5a4 4 0 0 1 0 5"/>
+              </svg>
+            </button>
+            <input class="vol__range" type="range" min="0" max="100" value="70" style="--vol-pct:70%" aria-label="试听音量">
+            <span class="vol__val">70</span>
+          </div>
+        </div>
+
+        <div class="header__spacer"></div>
+
+        <div class="engine">
+          <span class="engine__k">worker</span><span class="engine__v">2</span>
+          <span class="engine__k">长任务槽</span><span class="engine__v">1</span>
+        </div>
+
+        <button class="btn btn--icon" id="fxToggle" aria-pressed="true" aria-label="3D 跟随效果">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
+            <path d="M12 2.6 3.5 7.3v9.4L12 21.4l8.5-4.7V7.3z"/><path d="M3.5 7.3 12 12l8.5-4.7M12 12v9.4"/>
+          </svg>
+        </button>
+      </header>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">「接不上」提示 <code>.chain__notes</code> / <code>.chain__note</code></h3>
+    <p class="demo__desc">
+      绝对定位在链栏下一行，**只提示、不阻断** —— 这些组合跑得起来，只是结果可能不是用户以为的那样。
+    </p>
+    <div class="demo__stage demo__stage--h200" data-code>
+      <div class="chainbar" style="position:relative">
+        <span class="chainbar__label">执行链</span>
+        <div class="chain"><span class="chain__item">打包 ZIP</span></div>
+        <div class="chain__notes" style="position:static;margin-top:10px;max-width:none">
+          <span class="chain__note">「打包 ZIP」之后接不上任何卡片（交出的是压缩包）</span>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+</section>
+
+<!-- ============================== 5. 文件卡片 ============================== -->
+<section class="g-section">
+  <h2>5. 文件卡片（<code>filecard.css</code>）</h2>
+  <p class="g-note">
+    卡片高度**固定 160px**（不依赖内容）—— 否则 <code>canvas{height:100%}</code>
+    与自适应父级形成循环依赖，浏览器退回 canvas 固有 150px，把卡片撑到 ~390px。
+    元数据卡与状态列的宽度同样锁定（长标题会顶开列、挤压波形区）。
+    三态：<code>is-focused</code> / <code>is-checked</code> / <code>is-playing</code>。
+  </p>
+
+  <div class="demo">
+    <h3 class="demo__title">一张完整卡片</h3>
+    <div class="demo__stage" data-code>
+      <div class="filelist" style="padding-bottom:0;overflow:visible">
+        <div class="card">
+          <label class="card__pick check"><input type="checkbox"><span></span></label>
+          <div class="card__body">
+            <div class="wave">
+              <div class="wave__canvasWrap">
+                <canvas class="wave__canvas"></canvas>
+                <span class="wave__legend">−1.0 dBFS</span>
+                <span class="wave__play" style="left:38%"></span>
+              </div>
+              <div class="wave__meta">
+                <div class="transport">
+                  <button class="transport__btn" aria-label="试听">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13l11-6.5z"/></svg>
+                  </button>
+                  <span class="transport__time">1:12 / 3:42</span>
+                </div>
+                <div class="kv"><span class="kv__k">格式</span><span class="kv__v">FLAC</span></div>
+                <div class="kv"><span class="kv__k">采样率</span><span class="kv__v">48 kHz</span></div>
+                <div class="kv"><span class="kv__k">位深</span><span class="kv__v">24 bit</span></div>
+                <div class="kv"><span class="kv__k">峰值</span><span class="kv__v">−0.3 dBFS</span></div>
+              </div>
+            </div>
+
+            <div class="metacard">
+              <div class="cover cover--has">
+                <span class="cover__ph">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+                    <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 15l5-5 4 4 3-3 6 6"/>
+                  </svg>
+                </span>
+                <div class="cover__ovl">
+                  <button class="cover__act">导入</button>
+                  <button class="cover__act cover__act--danger">移除</button>
+                </div>
+              </div>
+              <div class="metabox">
+                <div class="metabox__row"><span class="metabox__k">标题</span><span class="metabox__v">Clair de lune</span></div>
+                <div class="metabox__row"><span class="metabox__k">艺术家</span><span class="metabox__v">Debussy</span></div>
+                <div class="metabox__row"><span class="metabox__k">专辑</span><span class="metabox__v">Suite bergamasque</span></div>
+                <div class="metabox__row"><span class="metabox__k">年份</span><span class="metabox__v">1905</span></div>
+              </div>
+            </div>
+
+            <div class="statuscol">
+              <span class="badge badge--run">运行中</span>
+              <div class="statuscol__prog"><i style="width:55%"></i></div>
+              <span class="statuscol__info">响度<br>标准化</span>
+              <button class="statuscol__act">详情</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">三种状态</h3>
+    <p class="demo__desc">
+      <code>is-focused</code> 左侧一条主色竖条；<code>is-checked</code> 换软色底；
+      <code>is-playing</code> 用 inset 阴影画左侧高亮条，并在长列表里方便找回。
+    </p>
+    <div class="demo__stage demo__stage--center demo__stage--h200" data-code>
+      <div class="demo__row">
+        <div class="card is-focused" style="width:190px;height:120px;padding:12px">
+          <div class="card__body" style="padding-left:12px"><b style="font-size:12.5px">is-focused</b></div>
+        </div>
+        <div class="card is-checked" style="width:190px;height:120px;padding:12px">
+          <div class="card__body" style="padding-left:12px"><b style="font-size:12.5px">is-checked</b></div>
+        </div>
+        <div class="card is-playing" style="width:190px;height:120px;padding:12px">
+          <div class="card__body" style="padding-left:12px"><b style="font-size:12.5px">is-playing</b></div>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+</section>
+
+<!-- ============================== 6. 抽屉与卡片库 ============================== -->
+<section class="g-section">
+  <h2>6. 抽屉与卡片库（<code>drawer.css</code> / <code>cardlib.css</code>）</h2>
+  <p class="g-note">
+    卡片 hover 的彩色网点（AM 半调，近处点大/远处点小）**只在 <code>#cardSections</code> 与
+    <code>#presetSections</code> 里生效** —— 选择器是带容器 ID 的。
+    网点层 <code>.__dots</code> **必须是卡片的直接子元素**（选择器写的是 <code>&gt;</code>）。
+    页头那个「模拟跟随」开关会按 <code>bindFollow()</code> 的公式写 <code>--nx/--ny/--mx/--my</code>，
+    把指针移到卡片上就能看到网点与视差。
+  </p>
+
+  <div class="demo">
+    <h3 class="demo__title">抽屉三档 + 快照条</h3>
+    <p class="demo__desc">
+      档位由 <code>data-stop</code>（<code>closed</code> / <code>mid</code> / <code>full</code>）
+      与 <code>data-open</code> 决定；盒顶与盒高由 JS 写成 <code>--drawer-top</code> / <code>--drawer-box</code>。
+      左边以 <code>--drawer-left</code> 为准（用侧栏**实际渲染宽度**，不是 <code>--sidebar-w</code>）。
+    </p>
+    <div class="demo__stage demo__stage--h400 demo__stage--pad0" data-code>
+      <div class="drawer" data-open="true">
+        <div class="drawer__bar">
+          <button class="drawer__handle" aria-expanded="true">
+            <span class="drawer__grip" aria-hidden="true"></span>
+          </button>
+          <div class="snaps">
+            <button class="snap">
+              <span class="snap__ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/></svg>
+              </span>
+              <span class="snap__txt"><span class="snap__name">转 FLAC</span><span class="snap__hint">格式转换</span></span>
+            </button>
+            <button class="snap is-added">
+              <span class="snap__ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 12h16M12 4v16"/></svg>
+              </span>
+              <span class="snap__txt"><span class="snap__name">响度标准化</span><span class="snap__hint">响度</span></span>
+            </button>
+            <button class="snap snap--add">
+              <span class="snap__ico">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+              </span>
+              <span class="snap__txt"><span class="snap__name">更多卡片</span><span class="snap__hint">拖到这里</span></span>
+            </button>
+          </div>
+        </div>
+        <div class="drawer__panel">
+          <div class="drawer__viewport">
+            <div class="drawer__head">
+              <button class="drawer__title drawer__title--btn" aria-pressed="false">
+                <span>功能卡片</span><span class="drawer__title-arrow" aria-hidden="true"></span>
+              </button>
+              <span class="drawer__scope">作用于 3 个文件</span>
+              <button class="btn btn--ghost btn--xs">全部收起</button>
+              <button class="btn btn--ghost btn--xs">收起</button>
+            </div>
+            <div class="drawer__cards" id="cardSections">
+              <div class="cardsec" data-collapsed="false">
+                <button class="cardsec__title">
+                  <span class="cardsec__arrow" aria-hidden="true"></span>
+                  格式转换
+                  <span class="cardsec__count">23</span>
+                </button>
+                <div class="cardsec__wrap">
+                  <div class="cardsec__grid">
+                    <button class="fcard">
+                      <span class="fcard__dots" aria-hidden="true"></span>
+                      <span class="fcard__top">
+                        <span class="fcard__ico">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/></svg>
+                        </span>
+                        <span class="fcard__name">转 FLAC</span>
+                      </span>
+                      <span class="fcard__desc">无损压缩，保留标签与封面</span>
+                      <span class="fcard__foot"><span class="fcard__tier">内置</span></span>
+                    </button>
+                    <button class="fcard is-added">
+                      <span class="fcard__dots" aria-hidden="true"></span>
+                      <span class="fcard__top">
+                        <span class="fcard__ico">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14M12 5v14"/></svg>
+                        </span>
+                        <span class="fcard__name">转 MP3</span>
+                      </span>
+                      <span class="fcard__desc">有损压缩，可指定码率</span>
+                      <span class="fcard__foot"><span class="fcard__tier">内置</span></span>
+                    </button>
+                    <button class="fcard fcard--custom">
+                      <span class="fcard__dots" aria-hidden="true"></span>
+                      <span class="fcard__top">
+                        <span class="fcard__ico">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
+                        </span>
+                        <span class="fcard__name">自定义链</span>
+                      </span>
+                      <span class="fcard__desc">自定义卡片：右上角有角标，与内置区分</span>
+                      <span class="fcard__foot"><span class="fcard__tier">自定义</span></span>
+                    </button>
+                    <button class="fcard fcard--blocked" disabled title="链尾决定：打包 ZIP 之后没有 op 接得住">
+                      <span class="fcard__dots" aria-hidden="true"></span>
+                      <span class="fcard__top">
+                        <span class="fcard__ico">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M6 6l12 12M18 6L6 18"/></svg>
+                        </span>
+                        <span class="fcard__name">转 WAV</span>
+                      </span>
+                      <span class="fcard__desc">置灰不是禁用：链尾决定它接不上</span>
+                      <span class="fcard__foot"><span class="fcard__tier">内置</span></span>
+                    </button>
+                    <button class="fcard fcard--new">
+                      <span class="fcard__dots" aria-hidden="true"></span>
+                      <span class="fcard__top">
+                        <span class="fcard__ico">
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 5v14M5 12h14"/></svg>
+                        </span>
+                      </span>
+                      <span class="fcard__name">新建卡片</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="drawer__search" data-search="closed">
+              <button class="searchbtn"><span>搜索卡片</span></button>
+              <div class="searchfield"><input class="input input--search" type="search" placeholder="输入卡片名称或说明…"></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="drawer-backdrop"></div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">分类段折叠 · 搜索展开态 · 链标签</h3>
+    <div class="demo__stage" data-code>
+      <div class="demo__row demo__row--col" style="gap:16px">
+        <div class="cardsec" data-collapsed="true" style="width:100%">
+          <button class="cardsec__title">
+            <span class="cardsec__arrow" aria-hidden="true"></span>
+            已折叠的分类 <span class="cardsec__count">16</span>
+          </button>
+          <div class="cardsec__wrap">
+            <div class="cardsec__grid">
+              <div class="fcard"><span class="fcard__dots" aria-hidden="true"></span><span class="fcard__name">看不见我</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="drawer__search" data-search="open" data-filtered="true" style="width:100%;border-top:0">
+          <button class="searchbtn"><span>搜索卡片</span></button>
+          <div class="searchfield"><input class="input input--search" type="search" value="flac"></div>
+        </div>
+
+        <div class="chain" style="width:100%">
+          <span class="chain__item">转 FLAC<button aria-label="移除">×</button></span>
+          <span class="chain__arrow">›</span>
+          <span class="chain__item chain__step--unknown">（未知卡片）<button aria-label="移除">×</button></span>
+          <span class="chain__empty">（空链时显示这句）</span>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">预设卡片 <code>.pcard</code></h3>
+    <p class="demo__desc">
+      预设卡片是 2×2 的图标平铺；<code>.pcard__ico</code> 里放的是**图形**
+      （与功能卡片同一条 path），不是 <code>FLAC</code>/<code>TAG</code> 这种短名文字 ——
+      否则同一个抽屉里会出现两套表达。省略号必须与图标同宽同高，6 格与 5 格的排布才不会跳。
+      <code>is-unknown</code> 是**高亮不是禁用**：快照齐全时它照样能跑。
+    </p>
+    <div class="demo__stage" data-code>
+      <div class="drawer__cards" id="presetSections" style="padding:0">
+        <div class="preset__grid">
+          <button class="pcard">
+            <span class="pcard__dots" aria-hidden="true"></span>
+            <span class="pcard__icons">
+              <span class="pcard__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/></svg></span>
+              <span class="pcard__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14M8 8h8M8 16h8"/></svg></span>
+              <span class="pcard__ico pcard__ico--more">…</span>
+            </span>
+            <span class="pcard__name">专辑归档</span>
+            <span class="pcard__desc">转 FLAC → 响度标准化 −16 → 打包 ZIP</span>
+            <span class="pcard__foot"><span class="badge">串行</span></span>
+          </button>
+          <button class="pcard is-unknown">
+            <span class="pcard__dots" aria-hidden="true"></span>
+            <span class="pcard__warn">2 未知</span>
+            <span class="pcard__icons">
+              <span class="pcard__ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg></span>
+              <span class="pcard__ico pcard__ico--more">…</span>
+            </span>
+            <span class="pcard__name">别人的预设</span>
+            <span class="pcard__desc">含未注册的卡片，仍可执行已认识的那几步</span>
+            <span class="pcard__foot"><span class="badge badge--failed">不完整</span></span>
+          </button>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">链编辑器 <code>.chainedit</code> / <code>.cedit</code></h3>
+    <div class="demo__stage" data-code>
+      <div class="chainedit">
+        <div class="cedit">
+          <span class="cedit__idx">1</span>
+          <span class="cedit__ico">FLAC</span>
+          <span class="cedit__body"><span class="cedit__name">转 FLAC</span><span class="cedit__note">压缩级别 5 · 保留标签</span></span>
+          <span class="cedit__acts"><button class="btn btn--xs btn--ghost">↑</button><button class="btn btn--xs btn--ghost">↓</button></span>
+        </div>
+        <div class="cedit cedit--unknown">
+          <span class="cedit__idx">2</span>
+          <span class="cedit__ico">?</span>
+          <span class="cedit__body"><span class="cedit__name">（未知卡片）</span><span class="cedit__note">本机没有注册这个 op</span></span>
+          <span class="cedit__acts"><button class="btn btn--xs btn--ghost">↑</button></span>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+</section>
+
+<!-- ============================== 7. 浮层 ============================== -->
+<section class="g-section">
+  <h2>7. 浮层（<code>overlays.css</code>）</h2>
+  <p class="g-note">
+    所有浮层真实都是 <code>position: fixed</code>；演示台里被画廊样式改成 <code>absolute</code> 才钉得住。
+    <b>显隐必须靠 <code>visibility</code> + <code>.is-open</code></b>，
+    不能靠 <code>display</code> —— 否则没法过渡。
+    因此它们显式顶回全局的 <code>[hidden]{display:none!important}</code>：
+    <code>.modal[hidden]{display:grid}</code>、<code>.notice[hidden]{display:flex!important}</code>。
+  </p>
+
+  <div class="demo">
+    <h3 class="demo__title">模态 <code>.modal</code>（<code>is-open</code> + <code>is-settled</code>）</h3>
+    <p class="demo__desc">
+      旋入动画 = <code>rotateX(--enter-rx)</code> + <code>translate</code> + <code>scale</code> 三个属性同长同缓动。
+      落定后（<code>is-settled</code>）会把 <code>transform</code> 移出过渡列表 ——
+      否则跟随效果每帧改 <code>--nx/--ny</code> 都会重启过渡，在一个带 <code>backdrop-filter</code>
+      的 fixed 盒子上每帧触发一次 Layout（实测 Layout +88 → +15）。
+      毛玻璃在 3D 关闭时改成「落定后才开」。
+    </p>
+    <div class="demo__stage demo__stage--h400 demo__stage--pad0" data-code>
+      <div class="modal is-open is-settled">
+        <div class="modal__scrim"></div>
+        <div class="modal__box" role="dialog" aria-modal="true">
+          <h2 class="modal__title">编辑元数据</h2>
+          <p class="modal__sub">01 - Clair de lune.flac</p>
+          <div class="modal__form">
+            <label class="field"><span>标题</span><input class="input" value="Clair de lune"></label>
+            <label class="field"><span>艺术家</span><input class="input" value="Debussy"></label>
+            <label class="field field--wide"><span>专辑</span><input class="input" value="Suite bergamasque"></label>
+          </div>
+          <div class="modal__acts">
+            <button class="btn btn--ghost">取消</button>
+            <button class="btn btn--primary">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">通知 <code>.notice</code> · 上传进度 <code>.uploadbar</code> · 右键菜单 <code>.ctxmenu</code></h3>
+    <p class="demo__desc">
+      通知从右侧滑入（关闭态 <code>translateX(自身宽 + 间距)</code>）。
+      <code>data-kind="error"</code> 换错误软底。
+    </p>
+    <div class="demo__stage demo__stage--h260 demo__stage--pad0" data-code>
+      <div class="notice is-open" role="status">
+        <div class="notice__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 8v5M12 16.5h.01"/><circle cx="12" cy="12" r="9"/>
+          </svg>
+        </div>
+        <div class="notice__text"><strong>提示</strong><span>已保存为预设「专辑归档」</span></div>
+        <button class="btn btn--xs">查看</button>
+        <button class="btn btn--ghost btn--xs">关闭</button>
+      </div>
+
+      <div class="notice is-open" data-kind="error" role="status" style="top:96px">
+        <div class="notice__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+            <path d="M12 8v5M12 16.5h.01"/><circle cx="12" cy="12" r="9"/>
+          </svg>
+        </div>
+        <div class="notice__text"><strong>执行失败</strong><span>ffmpeg exited 1</span></div>
+        <button class="btn btn--ghost btn--xs">关闭</button>
+      </div>
+
+      <div class="uploadbar">
+        <div class="uploadbar__row"><strong>03 - Arabesque.flac</strong><span>68%</span></div>
+        <div class="progress"><i style="width:68%"></i></div>
+        <div class="uploadbar__acts"><button class="btn btn--xs btn--ghost">取消</button></div>
+      </div>
+
+      <div class="ctxmenu" style="left:auto;right:14px;top:14px">
+        <div class="ctxmenu__head">01 - Clair de lune.flac</div>
+        <button class="ctxmenu__item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M4 12h16M12 4v16"/></svg>
+          编辑元数据 <kbd>E</kbd>
+        </button>
+        <button class="ctxmenu__item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="8"/></svg>
+          试听
+        </button>
+        <div class="ctxmenu__sep"></div>
+        <button class="ctxmenu__item" disabled>定位到文件（服务未运行）</button>
+        <button class="ctxmenu__item ctxmenu__item--danger">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          删除
+        </button>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">拖拽导入 <code>.dropzone</code></h3>
+    <p class="demo__desc"><code>data-over="true"</code> 是悬停高亮态（边框换主色、底换软色）。</p>
+    <div class="demo__stage demo__stage--h260 demo__stage--pad0" data-code>
+      <div class="dropzone" data-over="true">
+        <div class="dropzone__box">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <path d="M12 16V4M7 9l5-5 5 5M4 20h16"/>
+          </svg>
+          <strong>松手即导入</strong>
+          <span>支持 flac / wav / mp3 / m4a / ogg …，文件夹会保留目录结构</span>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+</section>
+
+<!-- ============================== 8. 编辑器 ============================== -->
+<section class="g-section">
+  <h2>8. 卡片编辑器（<code>editor.css</code>）</h2>
+  <p class="g-note">
+    <code>#cardIcons.iconpick</code> 带 ID 是**故意的**：预设模态的容器也带
+    <code>.iconpick</code>，如果这里写裸 <code>.iconpick</code>，
+    同特异性下后加载的 <code>editor.css</code> 会把 <code>drawer.css</code>
+    给预设写的 <code>display:grid</code> 悄悄压掉。
+  </p>
+
+  <div class="demo">
+    <h3 class="demo__title">编辑器双列 + 参数行</h3>
+    <p class="demo__desc">
+      <code>.cardedit</code> 自带 <code>max-height</code> 与内部滚动；
+      <code>.pspec</code> 是「标签 / 控件 / 说明」三行网格，说明占满整行。
+      响应式断点（900 / 1400）在 <code>editor.css</code> 末尾，**会改 filecard/drawer 的组件**。
+    </p>
+    <div class="demo__stage" data-code>
+      <div class="cardedit" style="max-height:none">
+        <div class="cardedit__col">
+          <div class="cardedit__base">
+            <label class="field"><span>名称</span><input class="input" value="转 FLAC"></label>
+            <label class="field"><span>图标</span><input class="input" value="flac"></label>
+          </div>
+          <div class="cardedit__h">参数 <span class="cardedit__hint">3 项</span></div>
+          <div class="cardedit__opsdesc">把输入转成 FLAC（无损）。压缩级别越高越慢、文件越小。</div>
+          <div class="cardedit__params">
+            <div class="pspec">
+              <div class="pspec__label">压缩级别<em>compression_level</em></div>
+              <div class="pspec__ctl"><input class="input" type="number" value="5"></div>
+              <div class="pspec__desc">0–12，默认 5。范围用 <code>0..12</code> 表示。</div>
+            </div>
+            <div class="pspec">
+              <div class="pspec__label">保留标签<em>keep_tags</em></div>
+              <div class="pspec__ctl"><label class="pspec__check"><input type="checkbox" checked> 保留原有标签与封面</label></div>
+              <div class="pspec__desc">关掉后会写出一份干净的标签集。</div>
+            </div>
+            <div class="pspec pspec--off">
+              <div class="pspec__label">采样率<em>sample_rate</em></div>
+              <div class="pspec__ctl"><input class="input" placeholder="保持原样"></div>
+              <div class="pspec__desc">这一项在当前组合下不生效（<code>--off</code> 置灰）。</div>
+            </div>
+            <div class="pspec">
+              <div class="pspec__label">备注<em>note</em></div>
+              <div class="pspec__ctl"><textarea class="input" rows="2">自用</textarea></div>
+              <div class="pspec__na">这一项不需要说明。</div>
+            </div>
+          </div>
+        </div>
+        <div class="cardedit__col">
+          <div class="cardedit__h">图标</div>
+          <div class="iconpick" id="cardIcons" role="radiogroup" aria-label="卡片图标">
+            <button class="iconpick__btn" role="radio" aria-checked="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/></svg>
+            </button>
+            <button class="iconpick__btn" role="radio" aria-checked="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
+            </button>
+            <button class="iconpick__btn" role="radio" aria-checked="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14M12 5v14"/></svg>
+            </button>
+          </div>
+          <div class="cardedit__h">命令预览</div>
+          <pre class="cmdpreview">ffmpeg -hide_banner -loglevel error -y -i "uploads/01.wav" -c:a flac -compression_level 5 "outputs/upload-20261004-abc123/01.flac"</pre>
+          <p class="cardedit__note">预览只是近似：真实输出路径由后端在 <code>outputs/</code> 下生成，用户无法指定。</p>
+          <div class="cardedit__err">压缩级别必须是 0–12 之间的整数（当前：13）</div>
+          <div class="cardedit__spacer"></div>
+        </div>
+      </div>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+
+  <div class="demo">
+    <h3 class="demo__title">预设的图标选择器 <code>.iconpick--preset</code></h3>
+    <p class="demo__desc">
+      与编辑器共用 <code>.iconpick__btn</code>（所以 3D 手感是同一个组件的一部分），
+      只留「多选 + 有自动态」这点差异。
+      <code>data-auto="1"</code> 时选中态改用**虚线框**表示「这是按链推导的，不是你手选的」。
+      <code>.iconpick__acts</code> 必须允许换行，否则按钮文字变长会顶出模态框。
+    </p>
+    <div class="demo__stage" data-code>
+      <div class="demo__row">
+        <div style="flex:1;min-width:260px">
+          <div class="iconpick iconpick--preset" data-auto="1" role="radiogroup" aria-label="预设图标（自动）">
+            <button class="iconpick__btn" role="radio" aria-checked="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/></svg>
+            </button>
+            <button class="iconpick__btn" role="radio" aria-checked="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14M8 8h8M8 16h8"/></svg>
+            </button>
+            <button class="iconpick__btn" role="radio" aria-checked="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8"/></svg>
+            </button>
+          </div>
+          <div class="iconpick__acts">
+            <button class="btn btn--ghost btn--xs">恢复自动</button>
+            <button class="btn btn--ghost btn--xs">全部图标</button>
+          </div>
+        </div>
+        <div style="flex:1;min-width:260px">
+          <div class="iconpick iconpick--preset" role="radiogroup" aria-label="预设图标（手选）">
+            <button class="iconpick__btn" role="radio" aria-checked="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/></svg>
+            </button>
+            <button class="iconpick__btn" role="radio" aria-checked="false">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 12h14M12 5v14"/></svg>
+            </button>
+          </div>
+          <p class="preset__meta">手选态：实心块（<code>editor.css</code> 那套）。</p>
+        </div>
+      </div>
+      <div class="preset__list">
+        <li>转 FLAC（内置）</li>
+        <li>响度标准化 −16（内置）</li>
+      </div>
+      <p class="preset__empty">还没有预设。建好执行链后点顶栏的「保存预设」，就会出现在这里。</p>
+    </div>
+    <pre class="demo__code"></pre>
+  </div>
+</section>
+
+<!-- ============================== 9. 状态钩子 ============================== -->
+<section class="g-section">
+  <h2>9. 状态钩子：哪些是 JS 写的</h2>
+  <p class="g-note">
+    改样式前先确认有没有 JS 在写这些钩子。完整清单见 <code>README.md</code> §6.1。
+  </p>
+  <table class="hooks">
+    <thead><tr><th>钩子</th><th>谁写</th><th>作用</th></tr></thead>
+    <tbody>
+      <tr><td><code>--nx</code> <code>--ny</code></td><td><code>bindFollow()</code></td><td>归一化指针位置（−1..1），继承给整个子树</td></tr>
+      <tr><td><code>--mx</code> <code>--my</code></td><td><code>bindFollow()</code></td><td>指针像素位置，给网点与光晕做径向遮罩原点</td></tr>
+      <tr><td><code>html[data-fx="off"]</code></td><td>3D 开关</td><td>关掉跟随：不叠毛玻璃、不给跟随动画</td></tr>
+      <tr><td><code>html[data-theme-switch]</code></td><td><code>switchTheme()</code></td><td>主题切换期间静音全部 <code>transition</code></td></tr>
+      <tr><td><code>data-vt-dir</code> / <code>--vt-d</code> / <code>--vt-r</code></td><td><code>switchTheme()</code></td><td>视图过渡方向与几何</td></tr>
+      <tr><td><code>--drawer-top</code> <code>--drawer-box</code> <code>--drawer-left</code></td><td>抽屉逻辑</td><td>三档几何（左边取侧栏实际渲染宽度）</td></tr>
+      <tr><td><code>is-open</code> / <code>is-settled</code></td><td><code>openModal</code> / <code>closeModal</code></td><td>模态两阶段动效</td></tr>
+      <tr><td><code>is-focused</code> <code>is-checked</code> <code>is-playing</code></td><td>卡片交互</td><td>文件卡片三态</td></tr>
+      <tr><td><code>is-added</code></td><td>链逻辑</td><td>卡片/快照「已加入执行链」的对勾</td></tr>
+      <tr><td><code>data-stop</code> <code>data-open</code> <code>data-dragging</code></td><td>抽屉手势</td><td>三档 + 拖拽中关过渡</td></tr>
+      <tr><td><code>data-collapsed</code></td><td>分类段折叠</td><td><code>true</code>/<code>false</code>，靠 <code>grid-template-rows</code> 过渡</td></tr>
+      <tr><td><code>data-search</code> <code>data-filtered</code></td><td>搜索</td><td><code>open</code> / 有过滤词时按钮挂小点</td></tr>
+      <tr><td><code>data-running</code></td><td>链运行中</td><td><code>.chainbar[data-running="true"] .btn--run</code></td></tr>
+      <tr><td><code>aria-pressed</code> / <code>aria-checked</code></td><td>各开关</td><td>分段开关、图标选择器、3D 开关的**选中态**</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================== 10. 主题并排 ============================== -->
+<section class="g-section g-bare-hide">
+  <h2>10. 6 套主题并排</h2>
+  <p class="g-note">
+    令牌定义在 <code>:root[data-theme=…]</code> 上（也就是 <code>&lt;html&gt;</code>），
+    所以**没法用嵌套 div 局部换主题** —— 这里用 6 个 iframe 各自加载本页的 bare 模式。
+  </p>
+  <div class="g-themes" id="gThemes"></div>
+</section>
+
+</div><!-- /g-wrap -->
+
+<script>
+/* ============================================================================
+   画廊自己的脚本。与 app.js / api.js 无关，也不被它们依赖。
+   ========================================================================== */
+(function () {
+  'use strict';
+  var root = document.documentElement;
+  var qs = new URLSearchParams(location.search);
+
+  /* ---------- bare 模式 + 初始主题（供 iframe 用） ---------- */
+  if (qs.get('bare') === '1') {
+    root.setAttribute('data-bare', '1');
+    root.setAttribute('data-fx', 'off');       // iframe 里不需要跟随
+  }
+  if (qs.get('theme')) root.dataset.theme = qs.get('theme');
+  if (qs.get('mode') === 'dark') root.dataset.mode = 'dark';
+  else if (qs.get('mode') === 'light') delete root.dataset.mode;
+
+  /* ---------- 主题切换 ---------- */
+  function syncSegs() {
+    document.querySelectorAll('[data-set-theme]').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.setTheme === root.dataset.theme));
+    });
+    var m = document.getElementById('gMode');
+    if (m) m.textContent = root.dataset.mode === 'dark' ? '深色 → 浅色' : '浅色 → 深色';
+  }
+  document.querySelectorAll('[data-set-theme]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      root.dataset.theme = b.dataset.setTheme;
+      syncSegs(); paintSwatches();
+    });
+  });
+  var modeBtn = document.getElementById('gMode');
+  if (modeBtn) modeBtn.addEventListener('click', function () {
+    if (root.dataset.mode === 'dark') delete root.dataset.mode;
+    else root.dataset.mode = 'dark';
+    syncSegs(); paintSwatches();
+  });
+
+  /* ---------- 3D 跟随 开/关 ---------- */
+  var fxBtn = document.getElementById('gFx');
+  if (fxBtn) {
+    if (root.getAttribute('data-fx') === 'off') { fxBtn.setAttribute('aria-pressed', 'false'); fxBtn.textContent = '3D 跟随：关'; }
+    fxBtn.addEventListener('click', function () {
+      var off = root.getAttribute('data-fx') === 'off';
+      if (off) { root.removeAttribute('data-fx'); } else { root.setAttribute('data-fx', 'off'); }
+      fxBtn.setAttribute('aria-pressed', String(off));
+      fxBtn.textContent = off ? '3D 跟随：开' : '3D 跟随：关';
+    });
+  }
+
+  /* ---------- 令牌色板：从当前生效的 :root 上现读 ---------- */
+  var TOKENS = [
+    '--ink', '--ink-accent', '--ink-error', '--text-muted', '--text-disabled',
+    '--bg-app', '--bg-surface', '--bg-surface-alt',
+    '--fill-primary', '--fill-accent', '--on-fill',
+    '--tint-primary', '--tint-accent', '--error-tint', '--error-solid',
+    '--border', '--border-strong', '--shadow-sm', '--shadow-md',
+    '--scroll-track', '--scroll-thumb'
+  ];
+  function paintSwatches() {
+    var host = document.getElementById('swatches');
+    if (!host) return;
+    var cs = getComputedStyle(root);
+    host.innerHTML = '';
+    TOKENS.forEach(function (t) {
+      var v = cs.getPropertyValue(t).trim();
+      var box = document.createElement('div');
+      box.className = 'sw';
+      var chip = document.createElement('div');
+      chip.className = 'sw__chip';
+      var inner = document.createElement('i');
+      // shadow 令牌不是颜色，塞进 background 会失效 —— 用 box-shadow 直接演示
+      if (t.indexOf('--shadow') === 0) inner.style.boxShadow = v;
+      else inner.style.background = v;
+      chip.appendChild(inner);
+      var txt = document.createElement('div');
+      var k = document.createElement('div'); k.className = 'sw__k'; k.textContent = t;
+      var val = document.createElement('div'); val.className = 'sw__v'; val.textContent = v || '(空)';
+      txt.appendChild(k); txt.appendChild(val);
+      box.appendChild(chip); box.appendChild(txt);
+      host.appendChild(box);
+    });
+  }
+
+  /* ---------- 代码块：从真实 DOM 抄，保证文档与实物一致 ---------- */
+  function tidy(html) {
+    return html
+      .replace(/^\s*\n/, '')
+      .replace(/\n\s*$/, '')
+      .split('\n')
+      .map(function (l) { return l.replace(/\s+$/, ''); })
+      .filter(function (l) { return l.trim() !== ''; })
+      // 统一去掉公共缩进
+      .map(function (l) { return l.replace(/^ {6}/, ''); })
+      .join('\n');
+  }
+  function fillCode() {
+    document.querySelectorAll('.demo').forEach(function (demo) {
+      var stage = demo.querySelector('[data-code]');
+      var pre = demo.querySelector('.demo__code');
+      if (!stage || !pre) return;
+      pre.textContent = tidy(stage.innerHTML);
+    });
+  }
+
+  /* ---------- 模拟跟随：按 bindFollow() 的公式写 --nx/--ny/--mx/--my ----------
+     app.js 在 cards / snaps 上做的是同一件事（app.js:4296-4301）：
+       --mx/--my = 相对元素的像素坐标；--nx/--ny = 归一化到 −1..1。
+     画廊没有 app.js，所以默认看不到网点与视差；这个开关把它补上。 */
+  var followOn = qs.get('bare') !== '1';
+  var followBtn = document.getElementById('gFollow');
+  var SEL = '#cardSections .fcard, #presetSections .pcard, .snap, .modal__box';
+  function reset(el) {
+    ['--mx', '--my', '--nx', '--ny'].forEach(function (p) { el.style.removeProperty(p); });
+  }
+  function track(ev) {
+    if (!followOn) return;
+    var el = ev.currentTarget;
+    var r = el.getBoundingClientRect();
+    if (!r.width || !r.height) return;
+    var x = ev.clientX - r.left, y = ev.clientY - r.top;
+    el.style.setProperty('--mx', x + 'px');
+    el.style.setProperty('--my', y + 'px');
+    el.style.setProperty('--nx', ((x / r.width) * 2 - 1).toFixed(3));
+    el.style.setProperty('--ny', ((y / r.height) * 2 - 1).toFixed(3));
+  }
+  function bindFollow() {
+    document.querySelectorAll(SEL).forEach(function (el) {
+      if (el.dataset.gFollow === '1') return;
+      el.dataset.gFollow = '1';
+      el.addEventListener('pointermove', track);
+      el.addEventListener('pointerleave', function () { reset(el); });
+    });
+  }
+  if (followBtn) {
+    followBtn.setAttribute('aria-pressed', String(followOn));
+    followBtn.textContent = '模拟跟随：' + (followOn ? '开' : '关');
+    followBtn.addEventListener('click', function () {
+      followOn = !followOn;
+      followBtn.setAttribute('aria-pressed', String(followOn));
+      followBtn.textContent = '模拟跟随：' + (followOn ? '开' : '关');
+      if (!followOn) document.querySelectorAll(SEL).forEach(reset);
+    });
+  }
+
+  /* ---------- 6 套主题并排（iframe，bare 模式） ---------- */
+  function buildThemes() {
+    var host = document.getElementById('gThemes');
+    if (!host) return;
+    var combos = [];
+    ['t1', 't2', 't3'].forEach(function (t) {
+      ['light', 'dark'].forEach(function (m) { combos.push([t, m]); });
+    });
+    var names = { t1: '蓝橙', t2: '绿橙', t3: '紫珊瑚' };
+    combos.forEach(function (c) {
+      var fig = document.createElement('figure');
+      var f = document.createElement('iframe');
+      f.loading = 'lazy';
+      f.src = 'gallery.html?bare=1&theme=' + c[0] + '&mode=' + c[1];
+      f.title = names[c[0]] + ' / ' + c[1];
+      var cap = document.createElement('figcaption');
+      cap.textContent = names[c[0]] + ' · ' + (c[1] === 'dark' ? '深色' : '浅色')
+                       + '  (data-theme="' + c[0] + '"' + (c[1] === 'dark' ? ' data-mode="dark"' : '') + ')';
+      fig.appendChild(f); fig.appendChild(cap);
+      host.appendChild(fig);
+    });
+  }
+
+  /* ---------- bare 模式：画一块紧凑面板就够 ---------- */
+  function buildBare() {
+    if (root.getAttribute('data-bare') !== '1') return;
+    var wrap = document.querySelector('.g-wrap');
+    wrap.innerHTML =
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">' +
+        '<span class="badge badge--run">' + (root.dataset.theme || 't1') + '</span>' +
+        '<span class="badge">' + (root.dataset.mode === 'dark' ? 'dark' : 'light') + '</span>' +
+        '<button class="btn btn--xs btn--primary">主操作</button>' +
+        '<button class="btn btn--xs">默认</button>' +
+        '<button class="btn btn--xs btn--danger">删除</button>' +
+        '<span class="dot dot--t1"></span><span class="dot dot--t2"></span><span class="dot dot--t3"></span>' +
+      '</div>' +
+      /* bare 面板里色板走两列：iframe 只有 340px 高，一列会只露前 4 个令牌 */
+      '<div class="sw-grid" id="swatches" style="grid-template-columns:repeat(2,1fr);gap:6px"></div>' +
+      '<div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">' +
+        '<div class="task" style="flex:1;min-width:150px"><div class="task__top">' +
+          '<span class="task__name">运行中</span><span class="badge badge--run">跑</span></div>' +
+          '<div class="progress"><i style="width:60%"></i></div></div>' +
+        '<div class="task task--failed" style="flex:1;min-width:150px"><div class="task__top">' +
+          '<span class="task__name">失败</span><span class="badge badge--failed">错</span></div></div>' +
+        '<div class="bulkbar" style="flex:1;min-width:150px;padding:9px 12px">' +
+          '<strong style="font-size:12px">批量</strong>' +
+          '<div class="bulkbar__acts"><button class="btn btn--sm">动作</button></div></div>' +
+      '</div>' +
+      '<div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">' +
+        '<div style="flex:1;min-width:190px"><div class="fcard">' +
+          '<span class="fcard__dots" aria-hidden="true"></span>' +
+          '<span class="fcard__top"><span class="fcard__ico">' +
+            '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">' +
+            '<path d="M4 14v-4M8 16V8M12 20V4M16 16V8M20 14v-4"/></svg></span>' +
+          '<span class="fcard__name">功能卡片</span></span>' +
+          '<span class="fcard__desc">hover 看网点与玻璃态</span></div></div>' +
+        '<div style="flex:1;min-width:190px"><div class="pcard">' +
+          '<span class="pcard__dots" aria-hidden="true"></span>' +
+          '<span class="pcard__name">预设卡片</span>' +
+          '<span class="pcard__desc">2×2 图标平铺</span></div></div>' +
+      '</div>';
+    // bare 面板里的 fcard/pcard 不在 #cardSections/#presetSections 里，
+    // 网点层不会生效（那是有意的：这里只做配色对照）。补一层容器让观感接近。
+    wrap.querySelector('.fcard').parentElement.id = 'cardSections';
+    wrap.querySelector('.pcard').parentElement.id = 'presetSections';
+    paintSwatches();
+  }
+
+  /* ---------- 起 ---------- */
+  buildBare();
+  if (root.getAttribute('data-bare') === '1') return;
+
+  syncSegs();
+  paintSwatches();
+  fillCode();
+  buildThemes();
+  bindFollow();
+
+  // 折叠/展开那两段用了过渡，切换后高度会变；代码块不受影响，不必重抄。
+  // 改了演示结构（加/删 [data-code]）时刷新即可。
+})();
+</script>
+</body>
+</html>

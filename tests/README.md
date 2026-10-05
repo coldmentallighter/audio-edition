@@ -148,6 +148,7 @@ python tests/chain_e2e_check.py           # 36 项（要服务）
 python tests/browser_chain_probe.py       # 63 项（要服务 + Edge）
 python tests/browser_chain_preset_probe.py # 73 项（要服务 + Edge）
 python tests/browser_drawer_tab_probe.py  # 47 项（要服务 + Edge）
+python tests/browser_modal_follow_probe.py # 23 项（要服务 + Edge）
 python tests/loudness_png_check.py       # 36 项（真文件那节要 uploads/ 有音频）
 ```
 
@@ -352,9 +353,32 @@ python demo/_build/verify_demo.py    # 自己起静态服务，不需要 8765，
 ## 2b. 配色（93 项 + 推导）
 
 ```powershell
-python tests/theme_check.py     # 读 theme.css 落盘值复算，改了色板必跑
+python tests/theme_check.py     # 读 ui/theme.css 落盘值复算，改了色板必跑
+python tests/ui_check.py        # 组件库结构：加载顺序 + 令牌引用，动了 ui/ 必跑
 python tests/palette_regen.py   # 从源色板推导 + 打印完整推导过程（排查用）
 ```
+
+`ui_check.py` 守的是 `theme_check.py` 管不到的那一半 —— **结构、打包与引用**：
+
+- `ui/` 的 10 个样式表是**一个整体**，层叠结果依赖先后（`editor.css` 最后一个加载，
+  会覆盖前面同特异性的规则）。所以它核对两个应用页面（`index.html` / `_snapdrag.html`）
+  声明的列表与 `ui/` 下的文件集合**完全一致、顺序完全一致**，并拒绝写回 `css/` 之类的老路径。
+- `ui-kit/audioedition-ui.css` 是那 10 个按同一顺序拼出来的**单文件交付产物**
+  （`tools/build_ui_kit.py` 生成）。它必须与源**逐字节一致** —— 应用不读产物，
+  所以"改了样式忘了重新打包"不会把应用带偏，只会让产物悄悄过期。
+  这就是 `demo/app.js` 那个教训的翻版（拷贝不同步，自检一路绿灯），必须有闸。
+- `var(--x)` 用到而全库没定义的，必须登记在 `RUNTIME_VARS` 里并写明**谁在运行时写它**；
+  定义了却没人用的，必须登记在 `RESERVED_VARS` 里并写明**谁在 CSS 之外消费它**
+  （目前只有两个：`--ink-accent` 给后端 SVG 渲染器，`--text-disabled` 是配色契约保留位）。
+  这两张表是**声明来源**，不是消音开关。
+- 顺带查 `ui/*.css` 与产物的行尾必须是 LF（`.gitattributes` 是 `eol=lf`）。
+
+顺序的**唯一事实来源**是 `tools/build_ui_kit.py` 的 `ORDER`（`ui_check.py` 直接 import），
+不另抄一份清单。
+
+组件库的用法、令牌配对契约、以及改样式的踩坑清单见 `ui-kit/README.md`；
+逐组件 × 6 套主题的可视化样例见 `ui-kit/gallery.html`（浏览器直接打开，
+也可以走服务：`http://127.0.0.1:8765/ui-kit/gallery.html`）。
 
 `theme_check.py` 覆盖 **6 套主题 × 21 个令牌齐全性 / 8 组文字对比度 /
 白字对错误实心 / 层级可见度 / 错误色与第一色不撞**，并打印全站最低对比度。

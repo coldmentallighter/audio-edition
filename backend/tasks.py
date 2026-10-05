@@ -49,8 +49,66 @@ _FLAC_SAMPLE_FMT = {"16": "s16", "24": "s32", "32": "s32"}   # 32f 不支持
 # 这份名单的事实源在 `backend/formats.py`（三个消费方共用），这里只是取个短别名。
 # 注意是**不带点**的容器名（下面拿它跟 `target` 比），别顺手加 `.`。
 LOSSLESS_FORMATS = {k for k in FORMAT_ARGS if not is_lossy(k)}
-COVER_UNSUPPORTED = {"wav", "aac", "aiff"}
-COVER_CAPABLE = {"m4a", "mp3", "mp4", "mov"}
+# ---------------------------------------------------------------- 封面的去留
+#
+# 哪些容器**真能**装封面 —— 这份名单是**在本机 ffmpeg 9.0.2 上逐个实跑**出来的，
+# 不是猜的（`-map 0:v? -c:v copy -disposition:v attached_pic` + ffprobe 复查）：
+#
+#   flac ✓   mp3 ✓   m4a ✓   mp4 ✓   mov ✓
+#   wav  ✗ "wav muxer does not support any stream of type video"
+#   ogg  ✗ "Unsupported codec id in stream 1"
+#   opus ✗ 同上
+#   wma  ✗ 同上（而且 wmav2 对这个源的采样率也不接受）
+#   aiff **rc=0 但封面查不到** —— 它"成功"了却没写上，所以按**不支持**处理。
+#        这种"不报错但也没做到"的最坑，只能靠实跑去发现。
+COVER_CAPABLE = frozenset({"flac", "mp3", "m4a", "mp4", "mov"})
+COVER_UNSUPPORTED = frozenset({"wav", "aiff", "aac", "ogg", "opus", "wma"})
+
+
+def _apply_cover_args(args: list[str], src: Path | None, target: str, *,
+                      keep_cover: bool) -> tuple[list[str], str]:
+    """按"目标容器能不能装封面"给 ffmpeg 参数补上封面映射。
+
+    返回 `(参数, 说明)`；说明非空时表示**源里有封面但没带过去**（调用方拿去告知用户）。
+
+    ⚠ 这份逻辑以前**在两个 handler 里各写了一遍**，而两边的名单还不一样：
+    `h_convert` 用 `COVER_CAPABLE`（缺 flac），`h_normalize` 用一行写死的
+    `src.suffix in (".m4a", ".mp4", ".mov", ".mp3")`。于是
+    **FLAC 源做响度标准化之后封面就没了** —— 而 flac 恰恰是最常见的那种源。
+    抽成一个函数的原因就是这个：同一件事写两遍，必然有一遍是错的。
+
+    `src=None` 表示**只算参数、不看源文件**（卡片编辑器的命令预览用）——
+    预览不该为了显示一行命令去读磁盘。
+    """
+    if not keep_cover:
+        return args + ["-map", "0:a"], ""
+    if target not in COVER_CAPABLE:
+        # 容器装不了。**不要**硬 map —— 那会让 ffmpeg 直接报错整个任务失败
+        # （wav/ogg/opus 都是这样）。只在源真有封面时提示一句。
+        note = ""
+        if src is not None and src.suffix.lower().lstrip(".") in COVER_CAPABLE:
+            try:
+                if audio.probe(src).has_cover:
+                    note = (f"{target.upper()} 容器不支持内嵌封面，"
+                            f"封面没有带过来（音频与标签不受影响）")
+            except Exception:                            # noqa: BLE001
+                note = ""
+        return args + ["-map", "0:a"], note
+    # 能装：**先 map 音频再 map 封面**，然后图片流原样搬过去
+    # （`-c:v copy` 不重编码，封面字节完全一致）。
+    #
+    # ⚠⚠ `-map 0:a` 这一条**不能省**。只写 `-map 0:v?` 时 ffmpeg 的自动选流
+    # 在某些容器上会挑不出音频 → `No audio stream present`（flac / mp3 实测都这样，
+    # 而 m4a 恰好能过，所以只测一个容器根本发现不了）。
+    # 这个函数以前是给 `h_convert` 用的，而 `h_convert` 在**别处**补了 `-map 0:a`；
+    # 后来 `h_normalize` 也改用它，那条 map 就丢了 —— 于是"修封面"的新代码
+    # 把音频整个弄没了。一条断言（`args` 里必须有 `-map 0:a`）就能挡住。
+    args += ["-map", "0:a", "-map", "0:v?", "-c:v", "copy",
+             "-disposition:v", "attached_pic"]
+    if target == "mp3":
+        # ID3v2.3 的兼容性最好（v2.4 有些老播放器读不到）
+        args += ["-id3v2_version", "3"]
+    return args, ""
 # ---------------------------------------------------------------- 波形图
 
 WAVE_MIN_W, WAVE_MAX_W = 200, 8000
@@ -278,16 +336,10 @@ def h_convert(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     if task.params.get("keepTags", True):
         args += ["-map_metadata", "0"]
 
-    want_cover = task.params.get("keepCover", True)
-    if want_cover and target in COVER_CAPABLE:
-        args += ["-map", "0", "-c:v", "mjpeg"]
-        if target in ("m4a", "mp4", "mov"):
-            args += ["-disposition:v", "attached_pic"]
-        elif target == "mp3":
-            args += ["-id3v2_version", "3", "-disposition:v", "attached_pic"]
-    else:
-        # wav / aiff / aac 以及用户主动取消封面时，只映射音频
-        args += ["-map", "0:a"]
+    # 封面的去留：统一走 `_apply_cover_args`（以前这里和 `h_normalize` 各写一遍，
+    # 而两边的名单不一样 —— 那种分叉的代价见那个函数的注释）
+    args, cover_note = _apply_cover_args(
+        args, src, target, keep_cover=bool(task.params.get("keepCover", True)))
 
     out = _out_path(src, f".{target}", task=task)
     args.append(str(out))
@@ -299,6 +351,8 @@ def h_convert(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         return False, {}, r.stderr_summary
 
     ctx.progress(100)
+    if cover_note:
+        logs.warn(f"⚠ 转换 {src.name}：{cover_note}")
     return True, {
         **_artifact(out),
         "command": args,
@@ -417,11 +471,20 @@ def h_normalize(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
     out = _out_path(src, f".norm{src.suffix}", task=task)
     norm_args = [
         ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-i", str(src),
-        "-af", af, "-map", "0:a",                    # 归一化只处理音频
+        "-af", af,
     ]
-    if src.suffix.lower() in (".m4a", ".mp4", ".mov", ".mp3"):
-        # 源里可能带封面，照旧带着走，但要显式给封面编码器
-        norm_args += ["-map", "0:v?", "-c:v", "mjpeg", "-disposition:v", "attached_pic"]
+    # 标签与封面的去留 —— 与 `h_convert` **走同一个函数**。
+    #
+    # ⚠ 这里以前是一行写死的扩展名判断
+    # （`if src.suffix.lower() in (".m4a", ".mp4", ".mov", ".mp3")`），
+    # 于是 **FLAC 源标准化之后封面就没了** —— 而 flac / mp3 恰恰是最常见的源。
+    # 响度标准化**不改变容器**，所以"能不能装封面"完全由源容器决定；
+    # 源能装就一定要带过去（用户没要求丢封面）。
+    if task.params.get("keepTags", True):
+        norm_args += ["-map_metadata", "0"]
+    norm_args, cover_note = _apply_cover_args(
+        norm_args, src, src.suffix.lower().lstrip("."),
+        keep_cover=bool(task.params.get("keepCover", True)))
     norm_args.append(str(out))
     r2 = runner.run(norm_args, timeout=config.TASK_TIMEOUT)
     if not r2.ok:
@@ -429,6 +492,8 @@ def h_normalize(task: store.TaskRow, ctx: Context) -> tuple[bool, dict, str]:
         return False, {}, r2.stderr_summary
 
     ctx.progress(100)
+    if cover_note:
+        logs.warn(f"⚠ 标准化 {src.name}：{cover_note}")
     # 第一遍已经测出来了，顺手落库 —— 卡片上那行「Loudness」的数据来源。
     # `input_i` 就是**整段素材的积分响度**（LUFS，带门限），正是 UI 要显示的值。
     _store_measurements(task.file_id, {

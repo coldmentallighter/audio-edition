@@ -34,8 +34,8 @@ _edge*/
 tests/_*_tmp/
 tests/_tmp*/
 tests/_design-extract/
-tests/_preset_profile/
-tests/_tab_profile/
+# CDP 探针的 Edge 用户目录（一个探针一个，里面全是浏览器垃圾）
+tests/_*_profile/
 # snapshot_drag_real.py 每次运行都会把内嵌的 PAGE_JS 写到这里，属于产物
 tests/_snapdrag_page.js
 

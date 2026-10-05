@@ -2,7 +2,7 @@
    AudioEdition 前端 · 视图与交互
    数据全部来自 FastAPI 后端；页面启动时 FILES / TASKS / LOGS 均为空数组，
    断网时走 window.applyOffline()，只显示空状态，不伪造任何数据。
-   配色契约（见 theme.css 顶部）：bg 与 tint 系列配 --ink，fill 系列配 --on-fill
+   配色契约（见 ui/theme.css 顶部）：bg 与 tint 系列配 --ink，fill 系列配 --on-fill
    ========================================================================== */
 
 'use strict';
@@ -37,7 +37,7 @@ function fmtDur(sec) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-/** 从 theme.css 的令牌里取色，保证波形跟随主题 */
+/** 从 ui/theme.css 的令牌里取色，保证波形跟随主题 */
 function tok(name, alpha) {
   const v = cssVar(name);
   if (!alpha || alpha >= 1) return v;
@@ -3024,7 +3024,7 @@ let metaCloseTimer = null;
 const _modalTimers = new WeakMap();
 
 /* 旋入动画播完后给模态加 .is-settled —— .modal__box 的毛玻璃从那一刻才开
-   （见 css/overlays.css：盒子在动的时候它的模糊采样区一直在动，每帧都要重新模糊）。
+   （见 ui/overlays.css：盒子在动的时候它的模糊采样区一直在动，每帧都要重新模糊）。
    两个模态的开启路径**不是同一个函数**（#cardModal 走 openModal，
    #metaModal 走 openMeta），所以抽成一个公共函数 —— 否则只改一处，
    另一个模态会永远没有毛玻璃。 */
@@ -3150,7 +3150,7 @@ function bind() {
 
        只动 transition，**绝不动 animation**：
        平扫 vt-sweep 与径向 vt-expand / vt-contract 都是 animation
-       （css/base.css 的 @keyframes），且作用在 ::view-transition-* 伪元素上
+       （ui/base.css 的 @keyframes），且作用在 ::view-transition-* 伪元素上
        —— 那是独立的伪元素树，`*` 后代选择器命中不到，所以它们照常播。
        别把 css 里那条规则扩展成 `animation: none`，也别把平扫/径向
        从 animation 改写成 transition(clip-path)，那样会被它一起掐掉。 */
@@ -4243,15 +4243,88 @@ function rectOf(el) {
   return r;
 }
 
+/*: 自己会变形的目标，命中判定要外扩多少（px）。
+    必须 ≥ 倾斜造成的轮廓缩进量 ≈ 0.006 × 元素宽
+    （模态盒宽上限 940px → 约 5.4px）。取 6。
+    调大 `--nx/--ny` 的 1.4deg、或调小 `.modal` 的 perspective 时要重算。 */
+const HIT_MARGIN = 6;
+
+/* 布局矩形 —— **不含自身 transform**。`offset*` 是布局值，与变换无关。
+   为什么要它：目标元素自己带跟随 transform 时，`getBoundingClientRect()` 给的是
+   **变换后**的 AABB，"指针在不在它上面"于是成了一个随倾斜变化的量（详见
+   bindFollow 的 stableHit）。这里沿 offsetParent 链累加到 container，
+   再加上 container 自己（未被变换）的矩形，得到一个**固定**的参照。
+   和 rectOf 一样按 _rectGen 缓存：稳态下一次布局都不读。
+
+   ⚠ **前提：从 el 到 container 必须是"嵌套定位链"**（每一步的 offsetParent
+   正好是下一步）。`offsetTop` 是相对 **offsetParent** 的 —— 若中间几层的
+   offsetParent 是同一个祖先（卡片就是这样：`.fcard` 与它的几层父容器都相对
+   `.drawer` 定位），逐级累加会**重复计数**，算出来的矩形是错的。
+   所以不满足前提时直接退回 AABB（=旧的、会抖的那条路）：宁可抖，也不能
+   让命中区错位。要把 stableHit 用到卡片上，得先按"扣除每个可滚动祖先的
+   scrollTop/scrollLeft"重写这个函数 —— 别直接打开开关。 */
+const _layoutCache = new WeakMap();
+function layoutRectOf(container, el) {
+  let r = _layoutCache.get(el);
+  if (r && r.gen === _rectGen) return r;
+  let x = 0, y = 0, n = el;
+  while (n && n !== container) {
+    x += n.offsetLeft;
+    y += n.offsetTop;
+    const p = n.offsetParent;
+    if (p !== container && p !== n.parentElement) return rectOf(el);   // 非嵌套定位链
+    n = p;
+  }
+  if (n !== container) return rectOf(el);
+  const c = container.getBoundingClientRect();
+  // 容器自己有滚动时，offset* 是"内容坐标"，要减掉滚动量才落到屏幕上
+  // （模态遮罩不滚动，所以这一项对当前唯一的调用方是 0）
+  r = { gen: _rectGen, left: c.left - container.scrollLeft + x,
+        top: c.top - container.scrollTop + y,
+        w: el.offsetWidth || 1, h: el.offsetHeight || 1 };
+  _layoutCache.set(el, r);
+  return r;
+}
+
 /* 通用：让 container 内的 itemSelector 元素跟随光标写入 --mx/--my/--nx/--ny
-   needsGlow=false 表示"这个容器里的元素不消费 --mx/--my"（两个模态就是：
-   它们只用 --nx/--ny 做倾斜，--mx/--my 全站只有 .fcard / .snap 的网点与径向光晕在用）。
-   于是 3D 关掉时，模态那条链路可以整个跳过 —— 一个字节都不写。 */
-function bindFollow(container, itemSelector, needsGlow = true) {
+   opts.glow !== false  → 这个容器里的元素消费 --mx/--my（默认 true）。
+     两个模态是 false：它们只用 --nx/--ny 做倾斜，--mx/--my 全站只有
+     .fcard / .snap 的网点与径向光晕在用。于是 3D 关掉时，模态那条链路可以整个
+     跳过 —— 一个字节都不写。
+   opts.stableHit      → 目标元素**自己带跟随 transform**（四个模态的 .modal__box）。
+     见下面那段"为什么模态要 stableHit"。 */
+function bindFollow(container, itemSelector, opts = {}) {
   if (!container || container.dataset.followBound) return;
   container.dataset.followBound = '1';
   if (!window.matchMedia('(hover: hover)').matches) return;
   bindFollowRectHooks();
+
+  const needsGlow = opts.glow !== false;
+
+  /* ── 为什么模态要 stableHit：抖动的根因 ────────────────────────────────
+     盒子的倾斜是"指针位置 → 变量 → transform"，而**浏览器命中测试**打在
+     变换**之后**的几何上。于是"指针还在不在盒子上"也变成了倾斜的函数：
+         指针停在盒子边缘
+           → 静止：命中盒子 → 写变量 → 倾斜
+           → 那一侧轮廓缩进约 5px → 不再命中 → pointerout 清掉变量
+           → 回正 → 又命中 → ……            （按帧率跑的极限环）
+     实测（宽盒 918×425、tilt 1.4°、`.modal` perspective 1000px、视口 966×703）：
+       · 边缘内侧 1–5px 处命中目标在"静止↔倾斜"之间翻转，共 5 条带
+         （`elementFromPoint` 逐点扫出来的）；
+       · 轮廓单侧缩进 rotateY 5.07/5.23px、rotateX 2.08px
+         （`transform-origin: 50% 10%`，转轴贴近上沿，所以上沿几乎不动）；
+       · 视口 966px 时盒宽 918px（`min(940px, 100vw - 48px)`）→ 盒子边框离
+         **窗口边**只有 24px，所以用户看到的现象是"鼠标到窗口边缘时模态在抖"。
+
+     ⚠ 试过、**不行**的修法：给 `.modal__box` 加一个 `::after { inset: -8px }`
+       内扩命中区。内侧那 5 条带确实没了，但伪元素是盒子的子节点、**跟着一起被
+       变换**，内边距自己也会缩进 —— 内外一起扫会看到多出 6 条带，落在边缘
+       **外** 2–7px。只是把不稳定搬了个地方（`ui/overlays.css` 里留了这段结论）。
+
+     所以这类目标**不再用浏览器的命中测试**：改用 layoutRectOf() 的布局矩形
+     （与 transform 无关）自己判"指针在不在盒子上"。判定边界固定在屏幕空间里，
+     不随倾斜移动 —— 环就不存在了。 */
+  const stableHit = opts.stableHit === true;
 
   /* 3D 开关关掉时：--nx/--ny 保持 0 —— 而不是"每帧写 0"。
      残留旧值这件事由开关自己负责：fxToggle 按下时会**一次性**把所有
@@ -4264,7 +4337,7 @@ function bindFollow(container, itemSelector, needsGlow = true) {
 
   /* 鼠标 1000Hz 时一帧内会来好几个 pointermove。原来每个都写 4 个变量，
      而 --mx/--my 驱动的是 mask-image / background-image（**绘制属性**，见
-     css/cardlib.css 的网点四层）—— 等于一帧内让同一张卡重绘好几次，
+     ui/cardlib.css 的网点四层）—— 等于一帧内让同一张卡重绘好几次，
      每次都要重新栅格化 4 层网点再把位图传给合成器（trace 实测：
      Paint 100–400us + Layerize 30–230us + Commit 30–270us，每次移动都来一遍）。
      合并到每帧一次即可：多出来的中间态本来就看不见。 */
@@ -4272,6 +4345,52 @@ function bindFollow(container, itemSelector, needsGlow = true) {
   let rafId = 0;
   let pend = null;
   const lastXY = new WeakMap();   // el → {x, y}，用来判断"动够了没有"
+
+  /* ── 释放动画（.is-returning）────────────────────────────────────────
+     `clearFollow()` 会在摘掉 --nx/--ny **之前**给元素挂上 .is-returning，
+     CSS 于是把这一次"回正"走成过渡而不是瞬变（模态原本是瞬变的：
+     它的 transform 被故意移出过渡列表以省连续跟随期间的开销，见 overlays.css）。
+
+     三条纪律，缺一个就会把那笔开销带回来或者留下脏类：
+       · 指针**又进来**时立刻摘掉（cancelReturning）—— 否则连续跟随又变成
+         "每帧重启过渡" → 每帧 Layout；
+       · 定时器按元素存（WeakMap），不是按容器一个 —— 指针扫过卡片网格时
+         同时有好几张卡在回正，共用一个 id 会漏摘（那些卡会永久停在慢缓动）；
+       · 只在"确实带着倾斜"时挂 —— 指针在盒子外来回移动时 clearFollow 会被
+         反复调用，不该每次都排一个定时器。
+     CSS 过渡按**墙钟**计时（不是按帧），0.30s 的曲线到 0.3s 处已 ~99%，
+     所以 380ms 后摘类是稳的。 */
+  const RELEASE_MS = 380;
+  const releaseTimers = new WeakMap();
+
+  function markReturning(el) {
+    if (releaseTimers.has(el)) return;        // 已经在窗口里，别重置定时器
+    el.classList.add('is-returning');
+    releaseTimers.set(el, setTimeout(() => {
+      el.classList.remove('is-returning');
+      releaseTimers.delete(el);
+    }, RELEASE_MS));
+  }
+
+  function cancelReturning(el) {
+    const t = releaseTimers.get(el);
+    if (t === undefined) return;              // 常见路径：没在回正，直接返回
+    clearTimeout(t);
+    releaseTimers.delete(el);
+    el.classList.remove('is-returning');
+  }
+
+  function clearFollow(el) {
+    // 已排队的补写要丢掉，否则会把变量写回一个指针已经离开的元素
+    if (pend && pend.el === el) pend = null;
+    lastXY.delete(el);
+    // 只有真的带着倾斜才需要"缓回"；否则（指针在盒子外游走）别反复挂类
+    if (el.style.getPropertyValue('--nx') !== ''
+        || el.style.getPropertyValue('--ny') !== '') {
+      markReturning(el);
+    }
+    ['--mx', '--my', '--nx', '--ny'].forEach(p => el.style.removeProperty(p));
+  }
 
   function flushFollow() {
     rafId = 0;
@@ -4281,7 +4400,9 @@ function bindFollow(container, itemSelector, needsGlow = true) {
     const el = p.el;
     if (!el.isConnected) return;
 
-    const r = rectOf(el);                 // 稳态下命中缓存，不读布局
+    /* stableHit 用布局矩形：--nx/--ny 于是只由指针位置决定，**与当前倾斜无关**。
+       （用 AABB 的话，矩形本身随倾斜/落定时刻变化，映射会跟着漂。） */
+    const r = stableHit ? layoutRectOf(container, el) : rectOf(el);
     const x = p.cx - r.left;
     const y = p.cy - r.top;
 
@@ -4306,22 +4427,46 @@ function bindFollow(container, itemSelector, needsGlow = true) {
     /* 3D 关掉 + 这个容器不消费 --mx/--my（两个模态就是）：
        整条链路没有任何东西要写，连 rAF 都不排。 */
     if (fxOff() && !needsGlow) return;
-    const el = e.target.closest(itemSelector);
-    if (!el || !container.contains(el)) return;
+
+    let el;
+    if (stableHit) {
+      /* 不用 e.target.closest()：那是**浏览器**的命中测试，打在倾斜后的几何上，
+         正是抖动的来源（见 bindFollow 顶部）。改用固定的布局矩形自己判。
+         附带好处：3D 关掉时上面那行已经返回，这里不必再判。 */
+      el = container.querySelector(itemSelector);
+      if (!el) return;
+      const r = layoutRectOf(container, el);
+      if (e.clientX < r.left - HIT_MARGIN || e.clientX > r.left + r.w + HIT_MARGIN ||
+          e.clientY < r.top - HIT_MARGIN || e.clientY > r.top + r.h + HIT_MARGIN) {
+        clearFollow(el);                // 真的离开了 → 回正（这一条取代了 pointerout）
+        return;
+      }
+    } else {
+      el = e.target.closest(itemSelector);
+      if (!el || !container.contains(el)) return;
+    }
+    // 指针又进来了：立刻结束"回正窗口"，否则连续跟随会每帧重启过渡
+    cancelReturning(el);
     pend = { el, cx: e.clientX, cy: e.clientY };
     if (!rafId) rafId = requestAnimationFrame(flushFollow);
   });
 
-  container.addEventListener('pointerout', (e) => {
-    const el = e.target.closest(itemSelector);
-    if (!el || !container.contains(el)) return;
-    const to = e.relatedTarget;
-    if (to && el.contains(to)) return;
-    // 已排队的补写要丢掉，否则会把变量写回一个指针已经离开的元素
-    if (pend && pend.el === el) pend = null;
-    lastXY.delete(el);
-    ['--mx', '--my', '--nx', '--ny'].forEach(p => el.style.removeProperty(p));
-  });
+  if (stableHit) {
+    /* 指针离开整个容器（模态遮罩是 inset:0，等于离开窗口）时回正 ——
+       否则最后一帧的倾斜会一直留着。命中边界由 pointermove 那段负责。 */
+    container.addEventListener('pointerleave', () => {
+      const el = container.querySelector(itemSelector);
+      if (el) clearFollow(el);
+    });
+  } else {
+    container.addEventListener('pointerout', (e) => {
+      const el = e.target.closest(itemSelector);
+      if (!el || !container.contains(el)) return;
+      const to = e.relatedTarget;
+      if (to && el.contains(to)) return;
+      clearFollow(el);
+    });
+  }
 }
 
 function initCardFollow() {
@@ -4428,10 +4573,12 @@ function init() {
   // "旋入动画结束后才开毛玻璃"。漏登记的表现很隐蔽：模态**能开能用**，
   // 只是看起来"硬"一点（没有倾斜、毛玻璃从第一帧就有），
   // 不会报任何错，所以只有人眼能发现（用户就是这么发现的）。
-  bindFollow(document.getElementById('metaModal'), '.modal__box', false);
-  bindFollow(document.getElementById('cardModal'), '.modal__box', false);
-  bindFollow(document.getElementById('presetModal'), '.modal__box', false);
-  bindFollow(document.getElementById('chainEditModal'), '.modal__box', false);
+  // 模态：要点见 bindFollow 顶部的 stableHit —— 目标自己会倾斜，
+  // 命中判定必须走布局矩形，否则指针停在模态边框上会抖（按帧率跑的极限环）。
+  // glow:false —— 它们只用 --nx/--ny 做倾斜，不消费 --mx/--my。
+  [ 'metaModal', 'cardModal', 'presetModal', 'chainEditModal' ].forEach(id => {
+    bindFollow(document.getElementById(id), '.modal__box', { glow: false, stableHit: true });
+  });
   syncDrawerLeft();
   applyStop('closed');
   requestAnimationFrame(redrawAllWaves);
