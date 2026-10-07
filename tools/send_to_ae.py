@@ -27,13 +27,14 @@ import urllib.request
 import urllib.error
 from pathlib import Path
 
-# ── 与 backend/config.py 逐字一致（已确认） ─────────────────────────────
+# ── 与 backend/config.py 逐字一致 ────────────────────────────────────
 BASE = "http://127.0.0.1:8765"
 HEALTH_URL = f"{BASE}/api/health"
 UPLOAD_URL = f"{BASE}/api/upload"
 
 AUDIO_EXT = {
     ".flac", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".aiff", ".aif", ".wma",
+    ".m4s",   # B 站缓存音频分段（MP4 容器）；与 config.AUDIO_EXT 保持一致
 }
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 ALLOWED_EXT = AUDIO_EXT | IMAGE_EXT

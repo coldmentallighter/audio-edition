@@ -69,7 +69,7 @@ html[data-vt-dir="contract"]::view-transition-old(root) {
 }
 html[data-vt-dir="contract"]::view-transition-new(root) { z-index: 1; }
 
-/* 圆心都在左下角（要改中心就把 at 后面换成 50% 50%） */
+/* 圆心：左下角-右上角（要改中心就把 at 后面换成 50% 50%） */
 @keyframes vt-expand {
   from { clip-path: circle(0 at 0% 100%); }
   to   { clip-path: circle(var(--vt-r, 150%) at 0% 100%); }

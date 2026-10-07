@@ -92,8 +92,11 @@ const DND = (() => {
   let cancelled = false;
   let xhr = null;
 
+  // ⚠ 与 backend/config.py 的 AUDIO_EXT 同步（后端那份才是权威，这里只是
+  // "拖拽时先过滤，免得把一堆无关文件传上去"）。加格式时两处都要改。
+  // `.m4s` = B 站缓存音频分段（MP4 容器），原理与 `.m4a` 一样。
   const ALLOW_AUDIO = new Set(['.flac', '.wav', '.mp3', '.m4a', '.aac', '.ogg',
-                               '.opus', '.aiff', '.aif', '.wma']);
+                               '.opus', '.aiff', '.aif', '.wma', '.m4s']);
   const ALLOW_IMAGE = new Set(['.jpg', '.jpeg', '.png', '.webp', '.bmp', '.gif']);
 
   const ext = (n) => { const i = n.lastIndexOf('.'); return i < 0 ? '' : n.slice(i).toLowerCase(); };

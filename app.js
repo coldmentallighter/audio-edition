@@ -980,6 +980,12 @@ const PLAYER_MIME = {
   flac: 'audio/flac', wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4',
   aac: 'audio/aac', ogg: 'audio/ogg', opus: 'audio/ogg; codecs=opus',
   aiff: 'audio/aiff', aif: 'audio/aiff', wma: 'audio/x-ms-wma',
+  // ffprobe 对 mp4 系容器（.mp4 / .m4a / .m4s）报的 format_name 第一段是 `mov`，
+  // 而 `ProbeInfo.as_dict()` 又把它转成大写，所以 `f.format` 在这里是 `"MOV"`
+  // （下面取 key 时已 toLowerCase）。少了这一行，`.m4s` 能放但 tooltip 会说
+  // "浏览器可能不支持 MOV" —— 是提示不准，不是放不了。
+  // 与后端 `formats._CONTAINER_ALIASES` 是同一件事的两端。
+  mov: 'audio/mp4',
 };
 
 let playingId = null;      // 当前正在播放（或暂停但仍是"当前"）的文件

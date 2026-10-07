@@ -41,6 +41,11 @@ TRASH_KEEP_DAYS = 30
 # 音频扩展名白名单（需求 §4.2 的常见格式互转）
 AUDIO_EXT = {
     ".flac", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".aiff", ".aif", ".wma",
+    # B 站缓存音频分段（本质是 MP4 容器，AAC / 少数 FLAC）。加进来之后上传、探测、
+    # 转换、波形、响度**全部现有卡片自动接受它**，不需要专属 op。
+    # 注意它**不是转换目标**：`formats.AUDIO_FORMATS` / `FORMAT_ARGS` 里没有它，
+    # 所以卡片编辑器的 format 下拉框不会多出这一项（两处刻意不同）。
+    ".m4s",
 }
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 

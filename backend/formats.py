@@ -60,6 +60,28 @@ FORMAT_ARGS: dict[str, list[str]] = {
 # 给界面用的短标签（卡片置灰的文案要拼它）
 CLASS_LABEL = {"lossy": "有损", "lossless": "无损"}
 
+# 探测出的容器名 → 分类用的规范名。
+#
+# `probe()` 取 `format_name` 的**第一段**（`audio.py:151`），而 mp4 系容器的第一段
+# 都是 `"mov"` —— 实测 `.m4s` 是 `"mov,mp4,m4a,3gp,3g2,mj2"`，`.m4a` / `.mp4` 同。
+# B 站缓存音频（`.m4s`）就是这么落进来的：它是 MP4 容器、后缀不在 `AUDIO_FORMATS`
+# 里，不归一就分类成 `None`（"未知"）。
+#
+# ⚠ **别名只用于分类**：`mov` 是探测出来的**源容器**，不是用户能选的**目标格式**，
+# 所以**不能**进 `AUDIO_FORMATS` —— 那会污染卡片编辑器的 format 下拉框，
+# 而 `FORMAT_ARGS` 里根本没有 `mov`，两处就不一致了。
+#
+# ⚠ **落点要说清，别以为它修了哪条规则**：`classify()` 现有的调用方拿到的都是
+# **文件后缀**（`chain._source_format`）或**卡片 `format` 参数**（`"mp3"`/`"m4a"`…），
+# 从来不是探测出的容器名 —— 所以这条别名今天**没有活的消费方**
+# （`chain.format_token` 是唯一的"容器名进 classify"的路，但它零调用点）。
+# 它修的是"模型对 mp4 系容器的分类口径"，不是"某条规则静默失效"：
+# 串行档的规则 A / 规则 B 一直按后缀判，`"m4a"` 那条**从来是命中的**
+# （`chain_build_check.py` 的 "源 MP3 128k → 转 M4A 256k（换容器也拦）" 就是证据）。
+# 有了它，将来谁拿 `probe()` 的 `format` 去判有损/无损
+# （注意 `ProbeInfo.as_dict()` 给的是**大写** `"MOV"`）才不会静默落到"未知"。
+_CONTAINER_ALIASES: dict[str, str] = {"mov": "m4a"}
+
 
 def clean(fmt: str | None) -> str:
     """归一化：去空白、去前导点、转小写。`".FLAC"` → `"flac"`，`None` → `""`。
@@ -73,11 +95,15 @@ def clean(fmt: str | None) -> str:
 def classify(fmt: str | None) -> str | None:
     """`"mp3"` / `".MP3"` → `"lossy"`；`"flac"` → `"lossless"`；空/未知 → `None`。
 
+    先过 `clean()`（所以 `".MOV"` / `"MOV"` / `"mov"` 都命中），再过
+    `_CONTAINER_ALIASES`（`"mov"` → `"m4a"`，见那里的说明）。
+
     返回 `None` 表示"不知道"（格式是空的，或者不是我们认得的容器），
     调用方应当**当作未知处理**，而不是默认成无损 —— 默认成无损会让
     "有损→无损"这类规则对未知格式**静默放行**（见模块头那段说明）。
     """
     f = clean(fmt)
+    f = _CONTAINER_ALIASES.get(f, f)
     if not f or f not in AUDIO_FORMATS:
         return None
     return "lossy" if f in LOSSY_FORMATS else "lossless"

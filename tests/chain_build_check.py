@@ -28,7 +28,7 @@ try:
 except Exception:
     pass
 
-from backend import chain, config, store                            # noqa: E402
+from backend import chain, config, formats, store                    # noqa: E402
 
 PASS = FAIL = 0
 
@@ -412,6 +412,35 @@ try:
     bad, why, idx = _reject({"mode": "parallel", "fileIds": [f_mp3_128.id],
                              "steps": [_conv("mp3", bitrate="320k")]})
     check("并行档不判码率（同一条链放行）", not bad, why)
+
+    # ------------------------------------------------------- 6b2. `mov` 别名
+    # mp4 系容器（`.mp4` / `.m4a` / `.m4s`）的 `format_name` 第一段都是 `mov`，
+    # 而 `probe()` 取第一段、`ProbeInfo.as_dict()` 又把它转成**大写**，
+    # 所以运行时喂给分类的是 `"MOV"`。
+    print()
+    print("== 6b2. mp4 系容器的 `mov` 别名（B 站 .m4s 靠它）==")
+    check("mov 归一成 m4a（有损）—— 探测出的 mp4 系容器不再落到「未知」",
+          formats.classify("mov") == "lossy"
+          and formats.classify("MOV") == "lossy"
+          and formats.classify(".MOV") == "lossy",
+          (formats.classify("mov"), formats.classify("MOV"), formats.classify(".MOV")))
+    check("is_known('mov') 为真（这是别名今天唯一的对外效果）",
+          formats.is_known("mov"))
+    # 别名**只用于分类**：`mov` 是探测出来的源容器，不是用户能选的目标格式。
+    # 防回归 —— 将来有人"图省事"直接往 AUDIO_FORMATS 里塞 mov。
+    check("mov 不在 AUDIO_FORMATS 里（否则卡片编辑器的 format 下拉框会多一项）",
+          "mov" not in formats.AUDIO_FORMATS, sorted(formats.AUDIO_FORMATS))
+    check("mov 不在 FORMAT_ARGS 里（与上一句口径必须一致）",
+          "mov" not in formats.FORMAT_ARGS, sorted(formats.FORMAT_ARGS))
+    # 负对照：别名不是通配。`m4s` 是**文件后缀**，规则 A/B 就是按后缀判的，
+    # 所以它必须仍然是"未知"（未知不猜 ⇒ 规则 B 第 0 步对 m4s 源不判）。
+    # 这条同时钉住"加了别名不会突然开始误拦 .m4s"。
+    check("负对照：m4s / bin / alac 仍然未知（别名只认 mov）",
+          formats.classify("m4s") is None and formats.classify("bin") is None
+          and formats.classify("alac") is None,
+          (formats.classify("m4s"), formats.classify("bin"), formats.classify("alac")))
+    check("m4s 源在格式流里既不判有损也不判无损（规则 B 第 0 步不判，不误拦）",
+          not formats.is_lossy("m4s") and not formats.is_lossless("m4s"))
 
     # ---------------------------------------------------------------- 6c
     print()

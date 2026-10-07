@@ -1027,6 +1027,108 @@ req("DELETE", f"/api/files/{_lid2}?withDisk=true")
 for _p in (ROOT / "outputs" / "loudness").glob("报响-*.loudness*.svg"):
     _p.unlink(missing_ok=True)
 
+# ============================================================ 21. B 站 .m4s
+# 需求：把 B 站缓存的音频分段（`.m4s`）当**普通音频**收进来 —— 不加专属 op，
+# 上传 / 探测 / 转换全部走现有路径。三处白名单必须一致
+# （`config.AUDIO_EXT` / `api.js DND.ALLOW_AUDIO` / `tools/send_to_ae.py AUDIO_EXT`），
+# 分类侧靠 `formats._CONTAINER_ALIASES` 把 mp4 系的 `mov` 归一成 `m4a`。
+#
+# `.m4s` 本质就是 MP4 容器，所以 ffprobe 报的 `format_name` 是
+# `mov,mp4,m4a,3gp,3g2,mj2`，`probe()` 取**第一段**得到 `mov`；
+# 而 `ProbeInfo.as_dict()` 又 `.upper()` 成 `MOV`。
+# ⚠ 这条断言是**钉子**：任何"拿 `info.format` 去比小写"的代码都是错的。
+# 谁把那个 `.upper()` 顺手删掉，前端 `PLAYER_MIME` 的 `mov` 键与后端别名
+# 会**同时**失效，而且不报任何错（表现只是 tooltip 说"可能不支持"）。
+print("== 21. B 站 .m4s（MP4 容器分段）走完整条链 ==")
+_suf3 = uuid.uuid4().hex[:6]
+_m4s = WORK / f"m4s-{_suf3}.m4s"
+subprocess.run(["ffmpeg", "-y", "-v", "error", "-f", "lavfi",
+                "-i", "sine=frequency=997:duration=2",
+                "-c:a", "aac", "-b:a", "128k",
+                "-f", "mp4", str(_m4s)], check=True)
+raw, ctype = multipart({"paths": json.dumps([f"冒烟测试/m4s-{_suf3}.m4s"])},
+                       [("files", f"m4s-{_suf3}.m4s", _m4s.read_bytes(), "audio/mp4")])
+s, up = req("POST", "/api/upload", raw=raw, ctype=ctype)
+check("POST /api/upload 接受 .m4s（白名单里加了它）", s == 200, up)
+_m4s_saved = (up or {}).get("saved", []) if isinstance(up, dict) else []
+check("上传返回 1 条 saved 记录", len(_m4s_saved) == 1, up)
+_m4s_id = _m4s_saved[0]["id"] if _m4s_saved else None
+check("服务端把它认成音频（kind=audio —— 前端靠它决定要不要拉波形）",
+      bool(_m4s_saved) and _m4s_saved[0].get("kind") == "audio",
+      _m4s_saved[0] if _m4s_saved else None)
+
+s, _p = req("POST", f"/api/files/{_m4s_id}/probe")
+_probe_row = wait_task_id((_p or {}).get("taskId"))
+check("探测任务成功", (_probe_row or {}).get("state") == "success",
+      (_probe_row or {}).get("error") or _probe_row)
+_i_m4s = _file_info(_m4s_id)
+check("info.format == 'MOV'（ffprobe 第一段 mov，as_dict 再 .upper()）",
+      _i_m4s.get("format") == "MOV", _i_m4s.get("format"))
+check("探测出了真时长与采样率（不是空壳 info）",
+      float(_i_m4s.get("duration") or 0) > 1.5
+      and int(_i_m4s.get("sampleRate") or 0) == 44100,
+      (_i_m4s.get("duration"), _i_m4s.get("sampleRate")))
+# 码率是串行档规则 B 第 0 步的输入（有损源升码率要拦）。这里只验**探测拿得到**；
+# 规则 B 对 `.m4s` 源**不判**（`classify("m4s")` 是 None，后缀不在白名单里，
+# 前后端都按"未知不猜"处理），那件事钉在 `chain_build_check.py` §6b2。
+check("info.bitRate 有值（规则 B 的输入之一，探测确实给了）",
+      float(_i_m4s.get("bitRate") or 0) > 0, _i_m4s.get("bitRate"))
+
+s, _sub = req("POST", "/api/ops/convert",
+              {"fileIds": [_m4s_id], "format": "mp3", "bitrate": "128k"})
+check("POST /api/ops/convert（m4s → mp3）200", s == 200, _sub)
+_row = wait_task_id((_sub.get("taskIds") or [None])[0])
+check("转换任务成功", bool(_row) and _row.get("state") == "success",
+      (_row or {}).get("error") or _row)
+_out_rel = ((_row or {}).get("result") or {}).get("output") or ""
+_out_abs = (ROOT / _out_rel) if _out_rel else None
+check("产物真的落盘且非空",
+      bool(_out_abs and _out_abs.exists() and _out_abs.stat().st_size > 0), _out_rel)
+check("产物后缀是 .mp3", _out_rel.lower().endswith(".mp3"), _out_rel)
+
+# 产物要在库里登记成**派生产物行**（`_publish_derived` 的"全部登记"那一半；
+# 另一半"只交接 derived"由 chain 侧的测试钉）。
+# ⚠ `GET /api/files` **默认只返回 `origin='imported'`** —— 派生产物被刻意过滤掉了
+# （否则"导入 3 个文件、链跑完变 23 个"会改掉全选/批量的作用域），
+# 所以这里只能绕过 HTTP 直接查库。先自证"本进程读到的就是服务器那个库"，
+# 否则环境不匹配会伪装成"没登记派生产物"。
+_all_local = store_mod.list_files(origin="all", include_deleted=True)
+check("前提：本进程读到的库与服务器是同一个（找得到刚上传的 m4s）",
+      any(x.id == _m4s_id for x in _all_local), _m4s_id)
+_derived = [x for x in _all_local
+            if x.origin == "derived" and x.rel_path.lower().endswith(".mp3")
+            and _suf3 in x.name]
+check("转换产物在库里有一行 origin=derived", len(_derived) == 1,
+      [(x.name, x.origin) for x in _derived])
+if _derived:
+    check("派生产物记了 derivedFrom（审计：这个产物是哪条任务产出的）",
+          bool(_derived[0].derived_from), _derived[0].as_dict())
+
+# 产物真的是一份 MP3 —— 不是"改了个后缀的原文件"
+if _out_abs and _out_abs.exists():
+    _pr = subprocess.run(["ffprobe", "-v", "error", "-show_entries",
+                          "format=format_name,duration", "-of", "json", str(_out_abs)],
+                         capture_output=True, text=True)
+    try:
+        _pj = (json.loads(_pr.stdout or "{}") or {}).get("format") or {}
+    except Exception:
+        _pj = {}
+    check("产物的 format_name 含 mp3", "mp3" in str(_pj.get("format_name", "")),
+          _pj.get("format_name"))
+    # 时长与源一致（±0.1s）：证明转的是**这份**音频，而不是一个空容器
+    check("产物时长与源一致（±0.1s）",
+          abs(float(_pj.get("duration") or 0)
+              - float(_i_m4s.get("duration") or 0)) < 0.1,
+          (_pj.get("duration"), _i_m4s.get("duration")))
+
+# 收尾：派生产物那一行也删掉。**必须 purge**（软删除的行仍占着 `rel_path`），
+# 否则库里会留一行指向已删文件的"僵尸"。
+for _d in _derived:
+    req("DELETE", f"/api/files/{_d.id}?withDisk=true&purge=true")
+req("DELETE", f"/api/files/{_m4s_id}?withDisk=true&purge=true")
+if _out_abs:
+    _out_abs.unlink(missing_ok=True)
+
 print(f"\n结果：{ok} passed, {fail} failed")
 
 # ---- 清理：把本次上传的测试文件全部删掉，不污染用户的库 ----
